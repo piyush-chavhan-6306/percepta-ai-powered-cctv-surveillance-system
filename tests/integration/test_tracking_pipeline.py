@@ -62,6 +62,9 @@ async def test_full_pipeline_yolo_to_bytetrack_to_eventstore_to_replay():
         zone_monitor=zone_monitor,
         event_store=event_store,
         emit_tracking_events=True,
+        # Assert the full per-frame telemetry contract. Production sampling
+        # (every Nth frame per track) is a volume control, not a schema change.
+        tracking_event_interval_frames=1,
     )
     pipeline.initialize()
 

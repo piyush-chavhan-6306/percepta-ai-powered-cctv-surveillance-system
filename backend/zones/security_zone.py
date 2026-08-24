@@ -165,6 +165,26 @@ class ZoneMonitor:
         # Track previous positions for boundary crossings: {track_id: (x, y)}
         self._track_prev_positions: Dict[str, Tuple[float, float]] = {}
 
+    @classmethod
+    def with_shared_definitions(cls, source: "ZoneMonitor") -> "ZoneMonitor":
+        """
+        Build a monitor that shares `source`'s zone/boundary definitions by
+        reference but keeps its own per-track state.
+
+        Live camera workers need both halves of this. Sharing the definition
+        dicts means a zone drawn via `/api/zones` (which mutates the global
+        monitor) takes effect immediately on every running camera, with no
+        re-registration. Keeping state private is what makes multi-camera safe:
+        the tracker assigns bare integer track IDs with no camera namespace, and
+        occupancy/previous-position state is keyed by that raw ID, so two
+        cameras sharing one monitor would overwrite each other's history and
+        emit phantom boundary crossings.
+        """
+        monitor = cls(event_store=source.event_store)
+        monitor.zones = source.zones
+        monitor.boundaries = source.boundaries
+        return monitor
+
     def add_zone(self, zone: SecurityZone) -> None:
         self.zones[zone.zone_id] = zone
 

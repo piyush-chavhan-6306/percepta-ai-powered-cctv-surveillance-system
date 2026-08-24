@@ -14,7 +14,14 @@ class Settings(BaseSettings):
     PORT: int = 8000
     HOST: str = "0.0.0.0"
     API_VERSION: str = "0.1.0"
-    CORS_ORIGINS: list[str] = ["*"]
+    # Explicit dev origins: the Vite dev server needs credentialed CORS, and
+    # "*" is rejected by browsers when allow_credentials is on.
+    CORS_ORIGINS: list[str] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+    ]
 
     # Gateway & Authentication (Phase 1)
     JWT_SECRET_KEY: str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -30,11 +37,23 @@ class Settings(BaseSettings):
     IOU_THRESHOLD: float = 0.45
     TARGET_FPS: float = 25.0
     MIN_FRAME_STRIDE: int = 1
-    MAX_FRAME_STRIDE: int = 3
+    # Headroom for CPU-only hosts. YOLOv8n costs ~40-70 ms per frame here, so a
+    # ceiling of 3 cannot reach TARGET_FPS and the controller saturates while
+    # still missing the target. Skipped frames are not dropped from the display:
+    # each one is Kalman-predicted and annotated, so the operator still sees a
+    # box on every frame -- stride trades detection frequency, not smoothness.
+    MAX_FRAME_STRIDE: int = 5
     DEFAULT_FRAME_STRIDE: int = 2
     ADAPTIVE_STRIDE_ENABLED: bool = True
     PERFORMANCE_SAMPLE_WINDOW: int = 15
     STRIDE_COOLDOWN_FRAMES: int = 30
+
+    # Live perception
+    # Register + start the bundled demo clip on boot so the dashboard opens on
+    # real video instead of an empty grid.
+    AUTOSTART_DEMO_CAMERA: bool = True
+    MJPEG_JPEG_QUALITY: int = 78
+    MAX_MJPEG_CLIENTS: int = 12
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./border_intelligence.db"

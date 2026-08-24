@@ -59,6 +59,7 @@ class TrackingPipeline:
         cooldown_frames: int = 30,
         enable_intermediate_predictions: bool = True,
         inference_lock: Optional["asyncio.Lock"] = None,
+        tracking_event_interval_frames: int = 10,
     ) -> None:
         self.detector = detector or get_detector()
         self.tracker = tracker or ByteTrackTracker()
@@ -75,6 +76,14 @@ class TrackingPipeline:
         self.cooldown_frames = cooldown_frames
         self.enable_intermediate_predictions = enable_intermediate_predictions
         self.inference_lock = inference_lock
+        # Tracking events are pure telemetry (heatmaps, incident dossiers, replay)
+        # and every visible object emits one per detection frame. At ~10 tracks
+        # and 12 detection fps that is ~10M rows/day -- the DB grew 154 MB in an
+        # hour of demo footage. Sampling every Nth frame *per track* keeps the
+        # trajectory shape (and the heatmap) while bounding growth ~10x. Alerts
+        # and zone events are never sampled: those must be exact.
+        self.tracking_event_interval_frames = max(1, tracking_event_interval_frames)
+        self._last_track_event_frame: Dict[int, int] = {}
         self._is_initialized = False
 
         # Telemetry & Metrics
@@ -92,6 +101,21 @@ class TrackingPipeline:
         self._last_tracks: List[TrackedObject] = []
         self._cooldown_counter = 0
         self._recent_latencies: list[float] = []
+        # Per-frame cost the pipeline itself cannot see (frame read, annotate,
+        # JPEG encode). The stride controller must include it or it optimizes a
+        # metric that excludes ~17 ms of every frame and settles one stride too
+        # low. Callers that only run the pipeline leave this at 0.
+        self._frame_overhead_ms = 0.0
+
+    def set_frame_overhead_ms(self, overhead_ms: float) -> None:
+        """
+        Report the out-of-pipeline cost of delivering one frame.
+
+        The live worker calls this each cycle with its measured read + annotate +
+        encode time so adaptive stride decisions are made against the rate the
+        operator actually sees rather than inference latency alone.
+        """
+        self._frame_overhead_ms = max(0.0, float(overhead_ms))
 
     def initialize(self) -> None:
         """Initialize detector and tracker."""
@@ -111,6 +135,7 @@ class TrackingPipeline:
         self._frames_predicted = 0
         self._cooldown_counter = 0
         self._recent_latencies.clear()
+        self._last_track_event_frame.clear()
         self._start_time = time.perf_counter()
 
     def get_metrics(self) -> Dict[str, Any]:
@@ -154,6 +179,23 @@ class TrackingPipeline:
         if len(self._recent_latencies) > cap:
             del self._recent_latencies[:-cap]
 
+    def _should_emit_track_event(self, track: TrackedObject, frame_number: int) -> bool:
+        """
+        Decide whether this track's telemetry is due to be persisted.
+
+        Always emits the first sighting and any lifecycle transition, so a track
+        appearing, being lost, or being re-acquired is never missed. Between those
+        it samples every `tracking_event_interval_frames`.
+        """
+        last = self._last_track_event_frame.get(track.track_id)
+        if last is None:
+            return True
+        # "updated" is the steady state; created/recovered/lost/terminated are all
+        # transitions worth recording exactly.
+        if getattr(track, "lifecycle", "updated") != "updated":
+            return True
+        return (frame_number - last) >= self.tracking_event_interval_frames
+
     def _evaluate_adaptive_stride(self) -> None:
         """
         Evaluate processing speed and adaptively adjust frame stride with hysteresis and cooldown.
@@ -170,7 +212,22 @@ class TrackingPipeline:
             return
 
         mean_lat_ms = sum(self._recent_latencies[-self.sample_window:]) / self.sample_window
-        effective_fps = (1000.0 / mean_lat_ms) * self.frame_stride if mean_lat_ms > 0 else 0.0
+
+        # `_recent_latencies` holds one sample per *displayed* frame, so it already
+        # averages cheap prediction frames in with expensive detection frames.
+        # Multiplying by frame_stride here would count the stride saving twice and
+        # report a wildly optimistic rate: at stride 2 with 67 ms detections and
+        # 0.2 ms predictions the mean is 33.6 ms, which is a true 29.8 fps, but
+        # scaling by the stride claimed 59.5 fps. That over-report tripped the
+        # "performance recovered" branch, dropped the stride back to 1, measured
+        # 14.9 fps, raised it again, and oscillated forever -- pinning real output
+        # at roughly half the achievable frame rate.
+        #
+        # `_frame_overhead_ms` charges each delivered frame its read + annotate +
+        # encode cost as well, so the controller targets the rate the operator
+        # actually sees rather than inference latency in isolation.
+        cycle_ms = mean_lat_ms + self._frame_overhead_ms
+        effective_fps = (1000.0 / cycle_ms) if cycle_ms > 0 else 0.0
 
         if effective_fps < self.target_fps * 0.85 and self.frame_stride < self.max_frame_stride:
             old_stride = self.frame_stride
@@ -313,7 +370,12 @@ class TrackingPipeline:
         # 3. Create tracking events
         tracking_events: List[TrackingEvent] = []
         if self.emit_tracking_events and tracks:
+            live_ids = set()
             for track in tracks:
+                live_ids.add(track.track_id)
+                if not self._should_emit_track_event(track, frame.frame_number):
+                    continue
+                self._last_track_event_frame[track.track_id] = frame.frame_number
                 track_event = TrackingEvent(
                     camera_id=frame.camera_id,
                     track_id=track.track_id,
@@ -330,6 +392,12 @@ class TrackingPipeline:
                     direction=track.direction_deg,
                 )
                 tracking_events.append(track_event)
+
+            # Drop bookkeeping for tracks that no longer exist, so this dict
+            # cannot grow without bound across a 24/7 run.
+            if len(self._last_track_event_frame) > len(live_ids):
+                for stale in [tid for tid in self._last_track_event_frame if tid not in live_ids]:
+                    del self._last_track_event_frame[stale]
 
         # 4. Evaluate security zones and virtual boundaries
         zone_events, alert_events = self.zone_monitor.evaluate_tracks(
