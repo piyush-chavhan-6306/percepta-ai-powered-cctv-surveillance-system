@@ -3,6 +3,7 @@ Border Intelligence Tracking & Intelligence Pipeline Module.
 Coordinates the end-to-end flow:
 FrameData -> ObjectDetector -> ByteTrackTracker -> ZoneMonitor -> EventStore -> EventBus.
 """
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
@@ -57,6 +58,7 @@ class TrackingPipeline:
         sample_window: int = 15,
         cooldown_frames: int = 30,
         enable_intermediate_predictions: bool = True,
+        inference_lock: Optional["asyncio.Lock"] = None,
     ) -> None:
         self.detector = detector or get_detector()
         self.tracker = tracker or ByteTrackTracker()
@@ -72,6 +74,7 @@ class TrackingPipeline:
         self.sample_window = sample_window
         self.cooldown_frames = cooldown_frames
         self.enable_intermediate_predictions = enable_intermediate_predictions
+        self.inference_lock = inference_lock
         self._is_initialized = False
 
         # Telemetry & Metrics
@@ -138,6 +141,19 @@ class TrackingPipeline:
             "device": getattr(self.detector, "device", "cpu"),
         }
 
+    def _record_latency(self, latency_ms: float) -> None:
+        """
+        Append a latency sample, keeping the buffer bounded.
+
+        This list is appended to on every single frame, so an unbounded list leaks
+        steadily during 24/7 operation (~25 fps == ~2M floats/day). Only the most
+        recent `sample_window` samples are ever read by the adaptive-stride logic.
+        """
+        self._recent_latencies.append(latency_ms)
+        cap = max(self.sample_window * 4, 64)
+        if len(self._recent_latencies) > cap:
+            del self._recent_latencies[:-cap]
+
     def _evaluate_adaptive_stride(self) -> None:
         """
         Evaluate processing speed and adaptively adjust frame stride with hysteresis and cooldown.
@@ -172,6 +188,21 @@ class TrackingPipeline:
                 f"Adaptive frame stride decreased {old_stride} -> {self.frame_stride}: "
                 f"measured effective FPS ({effective_fps:.1f}) recovered above target ({self.target_fps:.1f})"
             )
+
+    async def _detect_async(self, image) -> List[DetectionResult]:
+        """
+        Run YOLO inference without stalling the asyncio event loop.
+
+        Inference is compute-bound and costs tens of milliseconds, so it runs in a
+        worker thread; blocking the loop here would freeze every MJPEG client and
+        WebSocket broadcast for the duration. When multiple cameras share a single
+        detector instance, an optional lock serializes access because the
+        underlying model is not re-entrant.
+        """
+        if self.inference_lock is not None:
+            async with self.inference_lock:
+                return await asyncio.to_thread(self.detector.detect, image)
+        return await asyncio.to_thread(self.detector.detect, image)
 
     async def process_frame(
         self,
@@ -224,7 +255,7 @@ class TrackingPipeline:
                 self._last_total_ms = (t_end - t0) * 1000.0
                 self._last_inference_ms = 0.0
                 self._last_persistence_ms = 0.0
-                self._recent_latencies.append(self._last_total_ms)
+                self._record_latency(self._last_total_ms)
                 self._evaluate_adaptive_stride()
 
                 return FrameProcessingResult(
@@ -251,9 +282,9 @@ class TrackingPipeline:
 
         t0 = time.perf_counter()
 
-        # 1. Detect objects in frame
+        # 1. Detect objects in frame (offloaded to a thread so the event loop stays responsive)
         t_det_start = time.perf_counter()
-        detections = self.detector.detect(frame.image)
+        detections = await self._detect_async(frame.image)
         t_det_end = time.perf_counter()
         self._last_inference_ms = (t_det_end - t_det_start) * 1000.0
 
@@ -329,7 +360,7 @@ class TrackingPipeline:
         self._total_detections += len(detections)
 
         # Performance Watchdog & Adaptive Stride Evaluation
-        self._recent_latencies.append(self._last_total_ms)
+        self._record_latency(self._last_total_ms)
         self._evaluate_adaptive_stride()
 
         return FrameProcessingResult(

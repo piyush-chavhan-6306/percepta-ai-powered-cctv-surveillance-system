@@ -61,10 +61,11 @@ class VideoFileAdapter(SensorAdapter):
         self._is_running = True
         logger.info(f"VideoFileAdapter started for {self.camera_id}: {self._width}x{self._height} @ {self._native_fps} FPS")
 
-    async def get_next_frame(self) -> Optional[FrameData]:
+    def read_frame_blocking(self) -> Optional[FrameData]:
         """
-        Read the next frame from the video stream.
-        Automatically handles looping or stream termination.
+        Synchronous frame read. `cv2.VideoCapture.read()` blocks, so callers on the
+        asyncio event loop should dispatch this via a worker thread (CameraManager
+        does exactly that). Automatically handles looping or stream termination.
         """
         if not self._is_running or self._cap is None:
             return None
@@ -99,6 +100,13 @@ class VideoFileAdapter(SensorAdapter):
         # Push to ring buffer automatically
         self._buffer.push(frame_data)
         return frame_data
+
+    async def get_next_frame(self) -> Optional[FrameData]:
+        """
+        Read the next frame from the video stream.
+        Automatically handles looping or stream termination.
+        """
+        return self.read_frame_blocking()
 
     async def stop(self) -> None:
         """Release OpenCV capture and reset state."""

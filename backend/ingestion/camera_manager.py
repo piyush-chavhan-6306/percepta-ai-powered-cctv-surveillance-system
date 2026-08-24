@@ -187,13 +187,28 @@ class CameraManager:
         return [rec.to_dict() for rec in self._cameras.values()]
 
     async def get_latest_frame(self, camera_id: str) -> Optional[FrameData]:
-        """Fetch next frame from camera and update telemetry."""
+        """
+        Fetch next frame from camera and update telemetry.
+
+        Adapters backed by `cv2.VideoCapture` expose `read_frame_blocking()`; that
+        call is dispatched to a worker thread so a slow disk or stalled RTSP socket
+        cannot freeze the event loop (and with it every MJPEG client and WebSocket).
+
+        NOTE: this advances the source by one frame, so exactly one component per
+        camera may call it. The per-camera perception worker owns that role; other
+        consumers should read the worker's published annotated frame instead.
+        """
         record = self.get_camera(camera_id)
         if not record or not record.adapter.is_running:
             return None
 
         try:
-            frame = await record.adapter.get_next_frame()
+            blocking_reader = getattr(record.adapter, "read_frame_blocking", None)
+            if blocking_reader is not None:
+                frame = await asyncio.to_thread(blocking_reader)
+            else:
+                frame = await record.adapter.get_next_frame()
+
             if frame is not None:
                 record.frames_processed += 1
                 record.last_seen = frame.timestamp

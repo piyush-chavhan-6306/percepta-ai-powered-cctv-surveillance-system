@@ -80,8 +80,13 @@ class RTSPAdapter(SensorAdapter):
         self._is_running = True
         logger.info(f"RTSP stream connected for '{self.camera_id}': {self._width}x{self._height} @ {self._native_fps} FPS")
 
-    async def get_next_frame(self) -> Optional[FrameData]:
-        """Fetch next frame from RTSP stream."""
+    def read_frame_blocking(self) -> Optional[FrameData]:
+        """
+        Synchronous RTSP frame read. Network reads can stall for hundreds of
+        milliseconds, so callers on the event loop must dispatch this to a worker
+        thread (CameraManager does). After `_max_consecutive_failures` empty reads
+        the adapter marks itself stopped so the supervisor can reconnect it.
+        """
         if not self._is_running or self._cap is None:
             return None
 
@@ -111,6 +116,10 @@ class RTSPAdapter(SensorAdapter):
 
         self._buffer.push(frame_data)
         return frame_data
+
+    async def get_next_frame(self) -> Optional[FrameData]:
+        """Fetch next frame from RTSP stream."""
+        return self.read_frame_blocking()
 
     async def stop(self) -> None:
         """Release RTSP stream."""
