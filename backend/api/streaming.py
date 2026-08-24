@@ -7,14 +7,14 @@ Provides:
 import asyncio
 import logging
 from typing import Optional, Set
-import cv2
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from backend.events.bus import get_event_bus
 from backend.events.schema import BaseEvent
 from backend.gateway.dependencies import validate_ws_token
 from backend.ingestion.camera_manager import get_camera_manager
+from backend.tracking.live_worker import get_worker_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Streaming"])
@@ -108,42 +108,89 @@ async def websocket_events_endpoint(
         await ws_manager.disconnect(websocket)
 
 
-async def _mjpeg_generator(camera_id: str):
-    """Generator yielding multipart MJPEG frames from a registered camera."""
+_MAX_MJPEG_CLIENTS = 12
+_mjpeg_clients = 0
+_mjpeg_clients_lock = asyncio.Lock()
+
+
+async def _mjpeg_generator(camera_id: str, startup_grace: float = 30.0):
+    """
+    Yield multipart MJPEG frames already annotated by the camera's perception worker.
+
+    This deliberately does NOT read from the camera adapter. The worker owns the
+    frame source; a reader here would advance the capture and steal frames from
+    the worker, halving both streams. Frames are also encoded once by the worker
+    and fanned out here, so a second viewer costs no extra JPEG work.
+
+    `startup_grace` is how long to wait for a worker to publish its first frame
+    (model warm-up on the first detection is slow) before giving up on the stream.
+    """
+    global _mjpeg_clients
+
+    registry = get_worker_registry()
     manager = get_camera_manager()
-    last_frame_num = -1
-    last_jpeg_bytes = None
+    last_sequence = 0
 
-    while True:
-        rec = manager.get_camera(camera_id)
-        if not rec or not rec.adapter.is_running:
-            break
+    async with _mjpeg_clients_lock:
+        if _mjpeg_clients >= _MAX_MJPEG_CLIENTS:
+            logger.warning(
+                f"Refusing MJPEG viewer for '{camera_id}': {_MAX_MJPEG_CLIENTS} client limit reached"
+            )
+            return
+        _mjpeg_clients += 1
 
-        frame_data = await manager.get_latest_frame(camera_id)
-        if frame_data is not None and frame_data.image is not None:
-            # Re-encode only when a fresh frame arrives
-            if frame_data.frame_number != last_frame_num or last_jpeg_bytes is None:
-                ret, jpeg = cv2.imencode(".jpg", frame_data.image, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                if ret:
-                    last_jpeg_bytes = jpeg.tobytes()
-                    last_frame_num = frame_data.frame_number
+    try:
+        loop = asyncio.get_running_loop()
+        idle_since = None
+        while True:
+            worker = registry.get_worker(camera_id)
+            if worker is None or not worker.is_running:
+                # Camera stopped or deregistered: end the response cleanly so the
+                # browser's <img> stops rather than hanging on a dead stream.
+                if manager.get_camera(camera_id) is None:
+                    return
+                if idle_since is None:
+                    idle_since = loop.time()
+                elif loop.time() - idle_since > startup_grace:
+                    return
+                await asyncio.sleep(min(0.25, startup_grace))
+                continue
 
-            if last_jpeg_bytes is not None:
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + last_jpeg_bytes + b"\r\n"
-                )
-        else:
-            await asyncio.sleep(0.02)
+            frame = await worker.wait_for_frame(
+                after_sequence=last_sequence,
+                timeout=min(5.0, max(0.05, startup_grace)),
+            )
+            if frame is None:
+                if idle_since is None:
+                    idle_since = loop.time()
+                elif loop.time() - idle_since > startup_grace:
+                    logger.info(f"Closing idle MJPEG stream for '{camera_id}'")
+                    return
+                continue
 
-        await asyncio.sleep(0.008)
+            idle_since = None
+            last_sequence = frame.sequence
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                b"Content-Length: " + str(len(frame.jpeg)).encode() + b"\r\n\r\n"
+                + frame.jpeg + b"\r\n"
+            )
+    except asyncio.CancelledError:
+        raise
+    finally:
+        async with _mjpeg_clients_lock:
+            _mjpeg_clients = max(0, _mjpeg_clients - 1)
 
 
 @router.get("/api/stream/video/{camera_id}")
 async def stream_video(camera_id: str):
     """
-    MJPEG video streaming endpoint for real-time browser canvas / img tag display.
-    Streams multipart/x-mixed-replace format.
+    MJPEG video streaming endpoint for real-time browser display.
+
+    Serves the frames the perception worker already annotated, so the boxes the
+    operator sees are burned into the exact frame they belong to — there is no
+    client-side overlay that can drift out of sync with the video.
     """
     manager = get_camera_manager()
     cam = manager.get_camera(camera_id)
@@ -153,7 +200,44 @@ async def stream_video(camera_id: str):
             detail=f"Camera '{camera_id}' not found in registry",
         )
 
+    # A viewer arriving before the loop is up (e.g. after a server restart)
+    # transparently brings it back rather than showing a dead tile.
+    registry = get_worker_registry()
+    worker = registry.get_worker(camera_id)
+    if worker is None or not worker.is_running:
+        if cam.adapter.is_running:
+            await registry.start_worker(camera_id)
+
     return StreamingResponse(
         _mjpeg_generator(camera_id),
         media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "Age": "0",
+        },
+    )
+
+
+@router.get("/api/stream/snapshot/{camera_id}")
+async def stream_snapshot(camera_id: str):
+    """Single annotated JPEG — used for alert thumbnails and quick health checks."""
+    worker = get_worker_registry().get_worker(camera_id)
+    if worker is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No perception worker running for camera '{camera_id}'",
+        )
+
+    frame = worker.get_latest()
+    if frame is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Camera '{camera_id}' has not published a frame yet",
+        )
+
+    return Response(
+        content=frame.jpeg,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
     )
