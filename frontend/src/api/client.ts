@@ -128,11 +128,40 @@ class ApiClient {
     source_url?: string;
     location_label?: string;
     fps?: number;
+    loop?: boolean;
+    device_index?: number;
+    autostart?: boolean;
   }) {
     return this.request<CameraRecord>("/api/cameras/register", {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  uploadCameraVideo(formData: FormData) {
+    const url = `${this.baseUrl}/api/cameras/upload`;
+    return fetch(url, {
+      method: "POST",
+      body: formData,
+    }).then(async (res) => {
+      if (!res.ok) {
+        let err = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          if (body.detail) err = body.detail;
+        } catch {}
+        throw new Error(err);
+      }
+      return res.json() as Promise<CameraRecord>;
+    });
+  }
+
+  getAvailableSources() {
+    return this.request<{
+      bundled_clips: Array<{ name: string; path: string; size_mb: number }>;
+      uploaded_clips: Array<{ name: string; path: string; size_mb: number }>;
+      total_count: number;
+    }>("/api/cameras/sources/available");
   }
 
   startCamera(cameraId: string) {

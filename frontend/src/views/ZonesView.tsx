@@ -1,347 +1,313 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { useSurveillance } from "../store/surveillanceContext";
-import type { SecurityZone } from "../types/surveillance";
+import { api } from "../api/client";
+import type { ZoneTemplate } from "../types/surveillance";
 import {
-  Shield,
-  Plus,
+  Layers,
   Trash2,
   CheckCircle2,
-  Layers,
-  Crosshair,
-  Save,
+  Sparkles,
+  Plus,
+  Radio,
+  PenTool,
+  RefreshCw,
 } from "lucide-react";
+import { CameraCard } from "../components/CameraCard";
 
 export const ZonesView: React.FC = () => {
-  const { cameras } = useSurveillance();
-  const [selectedCameraId, setSelectedCameraId] = useState<string>(cameras[0]?.camera_id || "CAM-01");
-  const [zones, setZones] = useState<SecurityZone[]>([
-    {
-      zone_id: "ZONE_ALPHA_01",
-      name: "Restricted Perimeter Zone A",
-      polygon: [[15, 20], [85, 20], [85, 75], [15, 75]],
-      severity: "critical",
-      is_active: true,
-      loitering_threshold_seconds: 2.0,
-    },
-    {
-      zone_id: "ZONE_BRAVO_GATE",
-      name: "Sector Bravo Convoy Buffer Zone",
-      polygon: [[30, 40], [70, 40], [70, 85], [30, 85]],
-      severity: "restricted",
-      is_active: true,
-      loitering_threshold_seconds: 5.0,
-    },
-  ]);
-  const [message, setMessage] = useState<string | null>(null);
+  const { cameras, refreshAll } = useSurveillance();
+  const [activeZones, setActiveZones] = useState<any[]>([]);
+  const [activeBoundaries, setActiveBoundaries] = useState<any[]>([]);
+  const [templates, setTemplates] = useState<ZoneTemplate[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string>(
+    cameras[0]?.camera_id || "CAM-01"
+  );
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
-  // Drawing state
-  const [isDrawing, setIsDrawing] = useState<boolean>(false);
-  const [drawnBox, setDrawnBox] = useState<{ x: number; y: number; w: number; h: number } | null>({
-    x: 20,
-    y: 25,
-    w: 60,
-    h: 50,
-  });
-  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
-  const videoContainerRef = useRef<HTMLDivElement>(null);
+  const fetchZonesAndTemplates = async () => {
+    setIsLoading(true);
+    try {
+      const [zonesRes, tmplRes] = await Promise.all([
+        api.getZones().catch(() => null),
+        api.getZoneTemplates().catch(() => null),
+      ]);
 
-  // Form State
-  const [zoneName, setZoneName] = useState<string>("Sector Alpha — Restricted Zone B");
-  const [severity, setSeverity] = useState<string>("critical");
-  const [loiterSec, setLoiterSec] = useState<number>(2.5);
+      if (zonesRes) {
+        setActiveZones(zonesRes.zones || []);
+        setActiveBoundaries(zonesRes.boundaries || (zonesRes as any).virtual_boundaries || []);
+      }
+      if (tmplRes?.templates) {
+        setTemplates(tmplRes.templates);
+      }
+    } catch (err) {
+      console.error("Failed to fetch zones/templates:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchZonesAndTemplates();
+  }, []);
+
+  const handleDeleteZone = async (zoneId: string) => {
+    if (confirm(`Delete zone / boundary '${zoneId}'?`)) {
+      try {
+        await api.deleteZone(zoneId);
+        setStatusMessage(`Deleted '${zoneId}'.`);
+        setTimeout(() => setStatusMessage(null), 3000);
+        fetchZonesAndTemplates();
+      } catch (err: any) {
+        alert(`Failed to delete zone: ${err.message}`);
+      }
+    }
+  };
+
+  const handleApplyTemplate = async (templateId: string, name: string) => {
+    try {
+      await api.applyZoneTemplate(templateId, Date.now().toString().slice(-3), name);
+      setStatusMessage(`Applied template '${name}'! Active on all cameras.`);
+      setTimeout(() => setStatusMessage(null), 3500);
+      fetchZonesAndTemplates();
+    } catch (err: any) {
+      alert(`Failed to apply template: ${err.message}`);
+    }
+  };
 
   const activeCamera = cameras.find((c) => c.camera_id === selectedCameraId) || cameras[0];
 
-  // Mouse event handlers for interactive zone drawing on video
-  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!videoContainerRef.current) return;
-    const rect = videoContainerRef.current.getBoundingClientRect();
-    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
-    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
-    setDragStart({ x, y });
-    setIsDrawing(true);
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isDrawing || !dragStart || !videoContainerRef.current) return;
-    const rect = videoContainerRef.current.getBoundingClientRect();
-    const currX = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
-    const currY = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
-
-    const left = Math.min(dragStart.x, currX);
-    const top = Math.min(dragStart.y, currY);
-    const width = Math.abs(currX - dragStart.x);
-    const height = Math.abs(currY - dragStart.y);
-
-    setDrawnBox({ x: left, y: top, w: width, h: height });
-  };
-
-  const handleMouseUp = () => {
-    setIsDrawing(false);
-    setDragStart(null);
-  };
-
-  const handleSaveZone = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!drawnBox || drawnBox.w < 5 || drawnBox.h < 5) {
-      setMessage("Please draw a valid area rectangle over the video feed.");
-      setTimeout(() => setMessage(null), 3000);
-      return;
-    }
-
-    const newZoneId = `ZONE_${Date.now().toString().slice(-4)}`;
-    const newPolygon = [
-      [Math.round(drawnBox.x), Math.round(drawnBox.y)],
-      [Math.round(drawnBox.x + drawnBox.w), Math.round(drawnBox.y)],
-      [Math.round(drawnBox.x + drawnBox.w), Math.round(drawnBox.y + drawnBox.h)],
-      [Math.round(drawnBox.x), Math.round(drawnBox.y + drawnBox.h)],
-    ];
-
-    const newZone: SecurityZone = {
-      zone_id: newZoneId,
-      name: zoneName.trim() || `Security Zone ${newZoneId}`,
-      polygon: newPolygon,
-      severity,
-      is_active: true,
-      loitering_threshold_seconds: loiterSec,
-    };
-
-    setZones((prev) => [newZone, ...prev]);
-    setMessage(`Security Zone '${newZone.name}' saved and activated!`);
-    setTimeout(() => setMessage(null), 4000);
-  };
-
-  const handleDeleteZone = (id: string) => {
-    setZones((prev) => prev.filter((z) => z.zone_id !== id));
-  };
-
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-white/10 pb-3 flex-wrap gap-2">
+      {/* Top Banner */}
+      <div className="flex items-center justify-between flex-wrap gap-3 bg-[#0a0f18] border border-white/10 p-3 rounded-sm">
         <div className="flex items-center gap-2.5">
-          <Shield className="w-5 h-5 text-[#00e5ff]" />
+          <Layers className="w-5 h-5 text-[#00e5ff]" />
           <div>
-            <h2 className="font-display font-bold text-lg tracking-wider text-white">
-              SECURITY ZONES & PERIMETER BOUNDARY DESIGNER
-            </h2>
-            <p className="text-[11px] font-mono-tech text-gray-400">
-              Draw interactive geofenced restricted polygons and virtual tripwires directly onto surveillance feeds
+            <h3 className="font-display font-bold text-base tracking-wider text-white">
+              SECURITY ZONES & VIRTUAL TRIPWIRES
+            </h3>
+            <p className="font-mono-tech text-[11px] text-gray-400">
+              Deterministic point-in-polygon containment & vector line-crossing rules
             </p>
           </div>
         </div>
 
-        {/* Camera Selector */}
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono-tech text-gray-400">SELECT CCTV FEED:</span>
-          <select
-            value={selectedCameraId}
-            onChange={(e) => setSelectedCameraId(e.target.value)}
-            className="select text-xs py-1"
+          {statusMessage && (
+            <div className="px-3 py-1 bg-emerald-500/20 text-[#00e676] border border-emerald-500/40 rounded text-xs font-mono-tech flex items-center gap-1.5 animate-fade-in">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>{statusMessage}</span>
+            </div>
+          )}
+
+          <button
+            onClick={fetchZonesAndTemplates}
+            className="p-1.5 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 rounded transition-colors"
+            title="Refresh Zones"
           >
-            {cameras.map((c) => (
-              <option key={c.camera_id} value={c.camera_id}>
-                {c.name} ({c.camera_id})
-              </option>
-            ))}
-          </select>
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} />
+          </button>
         </div>
       </div>
 
-      {message && (
-        <div className="p-2.5 bg-[#00e676]/15 border border-[#00e676]/30 text-[#00e676] rounded text-xs flex items-center gap-2 font-mono-tech">
-          <CheckCircle2 size={16} /> {message}
-        </div>
-      )}
+      {/* Main Layout Grid */}
+      <div className="grid grid-cols-12 gap-4">
+        {/* Left Column (7 cols): Camera Video Card with In-Place Drawing */}
+        <div className="col-span-12 lg:col-span-7 space-y-3">
+          {/* Camera Picker */}
+          <div className="flex items-center justify-between bg-[#0a0f18] border border-white/10 p-2.5 rounded-sm">
+            <div className="flex items-center gap-2 font-mono-tech text-xs text-gray-300">
+              <Radio className="w-3.5 h-3.5 text-[#00e5ff]" />
+              <span>DRAW ON CAMERA:</span>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto">
+              {cameras.map((c) => (
+                <button
+                  key={c.camera_id}
+                  onClick={() => setSelectedCameraId(c.camera_id)}
+                  className={`px-2.5 py-1 text-[11px] font-mono-tech font-bold rounded flex items-center gap-1 transition-all ${
+                    selectedCameraId === c.camera_id
+                      ? "bg-[#00e5ff]/20 text-[#00e5ff] border border-[#00e5ff]/50"
+                      : "bg-white/5 text-gray-400 border border-white/10 hover:text-white"
+                  }`}
+                >
+                  {c.camera_id}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      {/* Main 2-Column Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* Left Column (7 cols): Interactive Video Feed with Canvas Area Drawer */}
-        <div className="lg:col-span-7 flex flex-col gap-3">
-          <div className="panel p-3">
-            <div className="flex justify-between items-center text-xs font-mono-tech text-gray-400 mb-2">
-              <span className="flex items-center gap-1.5 text-white font-bold">
-                <Crosshair size={13} color="#00e5ff" />
-                CLICK & DRAG TO DEFINE RESTRICTED REGION
-              </span>
-              <span className="text-[#00e5ff]">
-                FEED: {activeCamera?.name || selectedCameraId}
+          {/* Camera Card with In-Place Drawing Canvas */}
+          {activeCamera ? (
+            <div className="min-h-[420px]">
+              <CameraCard
+                camera={activeCamera}
+                onRefresh={() => {
+                  fetchZonesAndTemplates();
+                  refreshAll();
+                }}
+              />
+            </div>
+          ) : (
+            <div className="p-8 bg-[#090d14] border border-white/10 rounded text-center text-gray-500 font-mono-tech text-xs">
+              No active camera available to draw zones on.
+            </div>
+          )}
+
+          {/* Quick Guidance Box */}
+          <div className="p-3 bg-[#060a12] border border-white/10 rounded text-xs font-mono-tech text-gray-400 space-y-1">
+            <div className="text-gray-200 font-bold flex items-center gap-1">
+              <PenTool className="w-3.5 h-3.5 text-[#00e5ff]" />
+              <span>How to Draw Zones:</span>
+            </div>
+            <p>
+              1. Click <strong>ZONE</strong> or <strong>TRIPWIRE</strong> in the top-right of the video tile above.
+            </p>
+            <p>
+              2. Click on the video feed to place vertices (≥3 for polygon, 2 for tripwire). Clicks are converted to source-frame pixel coordinates automatically.
+            </p>
+            <p>
+              3. Set Severity / Loitering threshold and click <strong>SAVE</strong>. The rule activates immediately on the live stream!
+            </p>
+          </div>
+        </div>
+
+        {/* Right Column (5 cols): Active Zones List + Quick Tactical Templates */}
+        <div className="col-span-12 lg:col-span-5 space-y-4">
+          {/* Active Rules List */}
+          <div className="bg-[#090d14] border border-white/10 rounded-sm overflow-hidden flex flex-col">
+            <div className="px-4 py-3 bg-[#0e141f] border-b border-white/10 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Layers className="w-4 h-4 text-[#00e5ff]" />
+                <h4 className="font-display font-bold text-sm text-white">
+                  ACTIVE ZONES & TRIPWIRES
+                </h4>
+              </div>
+              <span className="text-[10px] font-mono-tech px-2 py-0.5 bg-white/5 border border-white/10 rounded text-gray-300">
+                {activeZones.length + activeBoundaries.length} RULES CONFIGURED
               </span>
             </div>
 
-            {/* Video + Interactive Draw Canvas Container */}
-            <div
-              ref={videoContainerRef}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              className="relative aspect-video bg-black rounded overflow-hidden border border-white/15 select-none cursor-crosshair"
-            >
-              <video
-                src={activeCamera?.local_video_url || "/videos/border-demo.mp4"}
-                autoPlay
-                loop
-                muted
-                playsInline
-                className="w-full h-full object-cover pointer-events-none"
-              />
+            <div className="p-3 overflow-y-auto space-y-2.5 max-h-[300px]">
+              {activeZones.length > 0 || activeBoundaries.length > 0 ? (
+                <>
+                  {/* Polygon Zones */}
+                  {activeZones.map((z) => (
+                    <div
+                      key={z.zone_id}
+                      className="p-3 bg-[#060a12] border border-white/10 rounded flex items-center justify-between gap-3"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-display font-bold text-xs text-white">
+                            {z.name}
+                          </span>
+                          <span
+                            className={`text-[9px] font-mono-tech font-bold px-1.5 py-0.2 rounded uppercase ${
+                              z.severity?.toUpperCase() === "CRITICAL"
+                                ? "bg-red-500/20 text-red-400 border border-red-500/30"
+                                : "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                            }`}
+                          >
+                            {z.severity}
+                          </span>
+                        </div>
+                        <div className="font-mono-tech text-[10px] text-gray-400 mt-1">
+                          ID: <code>{z.zone_id}</code> • {z.polygon?.length || 0} Vertices • Dwell: {z.loitering_threshold_seconds || 0}s
+                        </div>
+                      </div>
 
-              {/* Render Existing Saved Zones as Overlays */}
-              {zones.map((z) => (
-                <div
-                  key={z.zone_id}
-                  style={{
-                    position: "absolute",
-                    left: `${z.polygon[0][0]}%`,
-                    top: `${z.polygon[0][1]}%`,
-                    width: `${Math.abs(z.polygon[1][0] - z.polygon[0][0])}%`,
-                    height: `${Math.abs(z.polygon[2][1] - z.polygon[0][1])}%`,
-                    background: z.severity === "critical" ? "rgba(255, 23, 68, 0.15)" : "rgba(255, 171, 0, 0.15)",
-                    border: `2px dashed ${z.severity === "critical" ? "#ff1744" : "#ffab00"}`,
-                    pointerEvents: "none",
-                  }}
-                >
-                  <span
-                    className="text-[9px] font-mono-tech font-bold px-1 py-0.5 rounded text-white absolute top-1 left-1"
-                    style={{ background: z.severity === "critical" ? "#ff1744" : "#ffab00" }}
-                  >
-                    {z.name}
-                  </span>
-                </div>
-              ))}
+                      <button
+                        onClick={() => handleDeleteZone(z.zone_id)}
+                        className="p-1.5 bg-red-500/10 hover:bg-red-500/25 text-red-400 border border-red-500/30 rounded transition-colors"
+                        title="Delete Zone"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
 
-              {/* Real-time Drawing Box Preview */}
-              {drawnBox && (
-                <div
-                  style={{
-                    position: "absolute",
-                    left: `${drawnBox.x}%`,
-                    top: `${drawnBox.y}%`,
-                    width: `${drawnBox.w}%`,
-                    height: `${drawnBox.h}%`,
-                    border: "2px solid #00e5ff",
-                    background: "rgba(0, 229, 255, 0.2)",
-                    boxShadow: "0 0 15px rgba(0, 229, 255, 0.5)",
-                    pointerEvents: "none",
-                  }}
-                >
-                  <span className="text-[10px] font-mono-tech font-bold bg-[#00e5ff] text-black px-1.5 py-0.2 rounded absolute -top-5 left-0">
-                    NEW RESTRICTED ZONE [{Math.round(drawnBox.w)}% × {Math.round(drawnBox.h)}%]
-                  </span>
+                  {/* Virtual Tripwires */}
+                  {activeBoundaries.map((b) => (
+                    <div
+                      key={b.boundary_id}
+                      className="p-3 bg-[#060a12] border border-white/10 rounded flex items-center justify-between gap-3"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-display font-bold text-xs text-[#ffab00]">
+                            {b.name}
+                          </span>
+                          <span className="text-[9px] font-mono-tech font-bold px-1.5 py-0.2 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded uppercase">
+                            TRIPWIRE
+                          </span>
+                        </div>
+                        <div className="font-mono-tech text-[10px] text-gray-400 mt-1">
+                          ID: <code>{b.boundary_id}</code> • pt1: [{b.pt1?.join(",")}] → pt2: [{b.pt2?.join(",")}]
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => handleDeleteZone(b.boundary_id)}
+                        className="p-1.5 bg-red-500/10 hover:bg-red-500/25 text-red-400 border border-red-500/30 rounded transition-colors"
+                        title="Delete Tripwire"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <div className="p-6 text-center text-gray-500 font-mono-tech text-xs">
+                  No zones configured. Draw a zone on the video or apply a tactical template below.
                 </div>
               )}
-
-              <div className="absolute bottom-2 left-2 bg-black/70 px-2 py-0.5 rounded text-[10px] font-mono-tech text-gray-300 pointer-events-none">
-                DRAG MOUSE OVER VIDEO TO POSITION ZONE
-              </div>
-            </div>
-
-            <div className="flex justify-between items-center text-[10px] font-mono-tech text-gray-400 mt-2">
-              <span>ACTIVE CAMERA: <strong>{activeCamera?.camera_id}</strong></span>
-              <span>GEOMETRY: <strong>POINT-IN-POLYGON CONFINEMENT</strong></span>
             </div>
           </div>
-        </div>
 
-        {/* Right Column (5 cols): Zone Form & Active Zones List */}
-        <div className="lg:col-span-5 flex flex-col gap-4">
-          {/* Configure & Save Zone Form */}
-          <div className="panel p-4">
-            <div className="panel-title text-sm mb-3">
-              <Plus size={15} color="#00e5ff" />
-              Configure & Activate Security Zone
-            </div>
-
-            <form onSubmit={handleSaveZone} className="space-y-3">
-              <div>
-                <label className="hud-label">Security Zone Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Sector Alpha — Restricted Perimeter Zone"
-                  value={zoneName}
-                  onChange={(e) => setZoneName(e.target.value)}
-                  className="input text-xs"
-                />
+          {/* Tactical Templates */}
+          {templates.length > 0 && (
+            <div className="bg-[#090d14] border border-white/10 rounded-sm overflow-hidden flex flex-col">
+              <div className="px-4 py-3 bg-[#0e141f] border-b border-white/10 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#ffab00]" />
+                  <h4 className="font-display font-bold text-sm text-white">
+                    1-CLICK TACTICAL TEMPLATES
+                  </h4>
+                </div>
+                <span className="text-[10px] font-mono-tech text-gray-400">
+                  Pre-configured defense geometries
+                </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="hud-label">Intrusion Severity</label>
-                  <select
-                    value={severity}
-                    onChange={(e) => setSeverity(e.target.value)}
-                    className="select text-xs"
+              <div className="p-3 space-y-2 max-h-[300px] overflow-y-auto">
+                {templates.map((tmpl) => (
+                  <div
+                    key={tmpl.template_id}
+                    className="p-2.5 bg-[#060a12] border border-white/10 rounded flex items-center justify-between gap-3"
                   >
-                    <option value="critical">Critical (Immediate Alert)</option>
-                    <option value="restricted">Restricted (Warning)</option>
-                    <option value="warning">Buffer Zone (Low)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="hud-label">Loiter Threshold</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="0.5"
-                    max="60"
-                    value={loiterSec}
-                    onChange={(e) => setLoiterSec(Number(e.target.value))}
-                    className="input text-xs"
-                  />
-                </div>
-              </div>
-
-              <button type="submit" className="btn btn-primary btn-sm w-full mt-2" style={{ gap: "0.4rem" }}>
-                <Save size={13} /> Save & Apply Security Zone
-              </button>
-            </form>
-          </div>
-
-          {/* Active Security Zones List */}
-          <div className="panel p-4 flex-1">
-            <div className="panel-title text-sm mb-3">
-              <Layers size={15} color="#34d399" />
-              Active Security Zones ({zones.length})
-            </div>
-
-            <div className="space-y-2 max-h-[260px] overflow-y-auto">
-              {zones.map((z) => (
-                <div
-                  key={z.zone_id}
-                  className="p-2.5 bg-[#080c14] border border-white/10 rounded text-xs flex justify-between items-center"
-                >
-                  <div>
-                    <div className="text-white font-bold flex items-center gap-1.5">
-                      <span>{z.name}</span>
-                      <span
-                        className="text-[9px] font-mono-tech px-1.5 py-0.2 rounded font-bold"
-                        style={{
-                          background: z.severity === "critical" ? "rgba(255,23,68,0.2)" : "rgba(255,171,0,0.2)",
-                          color: z.severity === "critical" ? "#ff1744" : "#ffab00",
-                        }}
-                      >
-                        {z.severity.toUpperCase()}
+                    <div>
+                      <span className="font-display font-bold text-xs text-white block">
+                        {tmpl.name}
                       </span>
+                      <p className="text-[10px] text-gray-400 font-sans line-clamp-1">
+                        {tmpl.description}
+                      </p>
                     </div>
-                    <div className="text-[10px] font-mono-tech text-gray-400 mt-0.5">
-                      Loiter Threshold: {z.loitering_threshold_seconds}s • Status: ACTIVE
-                    </div>
-                  </div>
 
-                  <button
-                    onClick={() => handleDeleteZone(z.zone_id)}
-                    className="btn btn-danger btn-sm"
-                    style={{ padding: "0.2rem 0.4rem" }}
-                    title="Delete Zone"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ))}
+                    <button
+                      onClick={() => handleApplyTemplate(tmpl.template_id, tmpl.name)}
+                      className="px-2.5 py-1 bg-[#ffab00]/15 hover:bg-[#ffab00]/30 text-[#ffab00] border border-[#ffab00]/40 text-xs font-display font-bold rounded flex items-center gap-1 shrink-0 transition-colors"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>DEPLOY</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

@@ -1,163 +1,63 @@
 import React, { useState } from "react";
 import { useSurveillance } from "../store/surveillanceContext";
+import { api } from "../api/client";
 import {
   Bot,
   Send,
   ShieldCheck,
   Database,
-  HelpCircle,
+  Sparkles,
+  AlertCircle,
+  Loader2,
+  CheckCircle2,
 } from "lucide-react";
 
-interface GroundedMessage {
+interface ChatItem {
   id: string;
   sender: "user" | "assistant";
-  text: string;
-  timestamp: string;
-  dataRef?: {
-    type: "cameras" | "incidents" | "alerts" | "zones" | "threat" | "none";
-    items?: any[];
+  queryText?: string;
+  response?: {
+    observed_facts: string[];
+    rule_results: string[];
+    interpretation: string;
+    is_refusal?: boolean;
   };
+  plainText?: string;
+  timestamp: string;
 }
 
 export const IntelligenceView: React.FC = () => {
-  const { cameras, incidents, alerts, threat, metrics } = useSurveillance();
+  const { cameras } = useSurveillance();
   const [query, setQuery] = useState<string>("");
+  const [selectedCameraId, setSelectedCameraId] = useState<string>("");
   const [isThinking, setIsThinking] = useState<boolean>(false);
-  const [chatHistory, setChatHistory] = useState<GroundedMessage[]>([
+  const [chatHistory, setChatHistory] = useState<ChatItem[]>([
     {
-      id: "msg-01",
+      id: "init",
       sender: "assistant",
-      text: "Hello, Duty Officer. I am your Grounded AI Surveillance Assistant. I have live access to active camera feeds, detection logs, security incidents, and cryptographic evidence. How can I assist your sector watch?",
+      plainText:
+        "Greetings, Operator. I am your Grounded AI Intelligence Assistant. All answers are strictly grounded in active SQLite WAL surveillance records. I refuse ungrounded biometrics, weapon claims, or subjective intent speculation.",
       timestamp: new Date().toLocaleTimeString(),
     },
   ]);
 
   const presetQueries = [
-    "What cameras are currently active?",
-    "Show me active incidents.",
-    "What happened in Sector Alpha?",
-    "What vehicles were detected?",
-    "Are there any restricted-zone violations?",
-    "Summarize surveillance status.",
-    "What evidence is associated with Incident INC-2026-0801?",
+    "What targets crossed the perimeter boundary?",
+    "Show dwell time for Track 1.",
+    "Summarize recent critical incidents.",
+    "Did Track 2 enter any restricted zone?",
+    "What is the identity of the person on Camera 1? (Test refusal guardrail)",
+    "Do any targets have weapons? (Test refusal guardrail)",
   ];
 
-  // Grounded Intelligence Reasoner: Evaluates actual application state
-  const generateGroundedResponse = (userQuery: string): { text: string; dataRef?: GroundedMessage["dataRef"] } => {
-    const q = userQuery.toLowerCase().trim();
+  const handleSendQuery = async (textToSend?: string) => {
+    const q = (textToSend || query).trim();
+    if (!q) return;
 
-    // 1. Cameras Query
-    if (q.includes("camera") || q.includes("cameras") || q.includes("feeds") || q.includes("fleet")) {
-      const activeCount = cameras.filter((c) => c.status === "online").length;
-      return {
-        text: `There are currently **${cameras.length} surveillance cameras registered** in the system, with **${activeCount} online and actively streaming** AI detections.\n\n` +
-          cameras.map((c) => `• **${c.camera_id}** (${c.name}) — Sector: *${c.location_label}* [FPS: ${c.fps.toFixed(1)}, Status: ${c.status.toUpperCase()}]`).join("\n"),
-        dataRef: { type: "cameras", items: cameras },
-      };
-    }
-
-    // 2. Incidents Query
-    if (q.includes("incident") || q.includes("incidents") || q.includes("breach") || q.includes("case")) {
-      if (incidents.length === 0) {
-        return { text: "There are currently **0 active security incidents** recorded in the database. All monitored sectors are clear." };
-      }
-      return {
-        text: `There are currently **${incidents.length} security incidents** in the incident command log:\n\n` +
-          incidents.map((inc) => `• **${inc.incident_id}** — Camera: *${inc.camera_id}* | Total Infractions: ${inc.total_events} | Status: **${inc.status}** | Last seen: ${new Date(inc.last_seen).toLocaleTimeString()}`).join("\n") +
-          `\n\nTo inspect synchronized video evidence and chain-of-custody, open the **Incidents Command** view.`,
-        dataRef: { type: "incidents", items: incidents },
-      };
-    }
-
-    // 3. Sector Alpha Query
-    if (q.includes("sector alpha") || q.includes("alpha")) {
-      const alphaCam = cameras.find((c) => c.location_label.toLowerCase().includes("alpha") || c.camera_id === "CAM-01");
-      const alphaAlerts = alerts.filter((a) => a.camera_id === "CAM-01" || a.message.toLowerCase().includes("alpha"));
-      return {
-        text: `**Sector Alpha Situation Report:**\n` +
-          `• Primary Camera: **${alphaCam?.name || "CAM-01 Sector Alpha"}** (Status: ${alphaCam?.status.toUpperCase() || "ONLINE"})\n` +
-          `• Active Alerts: **${alphaAlerts.length}** events recorded\n` +
-          `• Key Detection: Person detected crossing restricted north fence boundary (Track ID: TRK-09, 96% confidence).\n` +
-          `• Escalation: Incident **INC-2026-0801** was auto-generated and dispatched for operator acknowledgement.`,
-        dataRef: { type: "alerts", items: alphaAlerts },
-      };
-    }
-
-    // 4. Vehicles Query
-    if (q.includes("vehicle") || q.includes("car") || q.includes("truck") || q.includes("convoy")) {
-      const vehicleAlerts = alerts.filter((a) => a.message.toLowerCase().includes("vehicle") || a.track_id === "TRK-12");
-      return {
-        text: `**Vehicle Detections Summary:**\n` +
-          `• **1 vehicle detection** recorded at **CAM-02 (Sector Bravo Convoy Gate)**.\n` +
-          `• Target Track ID: **TRK-12** (Confidence: 88%).\n` +
-          `• Behavior: Vehicle approached restricted gate barrier without transponder handshake. Incident **INC-2026-0802** is open.`,
-        dataRef: { type: "alerts", items: vehicleAlerts },
-      };
-    }
-
-    // 5. Zone Violations Query
-    if (q.includes("zone") || q.includes("violation") || q.includes("restricted") || q.includes("perimeter")) {
-      return {
-        text: `**Restricted Zone Violations Report:**\n` +
-          `• **Restricted Zone A (Sector Alpha)**: 1 confirmed perimeter breach (Target TRK-09, dwelling time > 3.2s).\n` +
-          `• **Sector Bravo Buffer Zone**: 1 vehicle loitering event near gate line.\n` +
-          `• Both events matched deterministic polygon rules and generated operator alerts with SHA-256 evidence logging.`,
-        dataRef: { type: "zones" },
-      };
-    }
-
-    // 6. Incident INC-2026-0801 Evidence Breakdown
-    if (q.includes("inc-2026-0801") || q.includes("801") || q.includes("evidence associated")) {
-      return {
-        text: `**Evidence Dossier for Incident INC-2026-0801:**\n` +
-          `• **Camera**: CAM-01 (Sector Alpha Perimeter Post 1)\n` +
-          `• **Event Type**: Restricted Zone Intrusion\n` +
-          `• **Target**: Person (Track ID: TRK-09, Confidence: 96%)\n` +
-          `• **AI Reasoning**: YOLOv8n centroid intersected geofenced polygon boundary with dwelling time of 3.2s.\n` +
-          `• **Cryptographic Fingerprint (SHA-256)**: \`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\`\n` +
-          `• **Chain of Custody**: Stored in SQLite WAL -> Verified Authentic.`,
-      };
-    }
-
-    // 7. Status Summary
-    if (q.includes("summarize") || q.includes("status") || q.includes("overview") || q.includes("brief")) {
-      return {
-        text: `**Border Surveillance Executive Briefing:**\n` +
-          `• **Threat Level**: **${threat?.threat_score || 48}/100** (DEFCON YELLOW / ELEVATED)\n` +
-          `• **Fleet Ingestion**: ${cameras.length} Cameras Active (${metrics?.ai_processing_fps.toFixed(1) || "31.2"} FPS AI Throughput)\n` +
-          `• **Incidents**: ${incidents.length} active (${incidents.filter((i) => i.status === "INVESTIGATING").length} under active investigation)\n` +
-          `• **Recommended Action**: ${threat?.recommended_action || "Maintain regular sector scan. Dispatch QRF patrol to verify Sector Alpha north perimeter."}`,
-        dataRef: { type: "threat" },
-      };
-    }
-
-    // 8. Polite Greetings / General Help
-    if (q === "hi" || q === "hello" || q === "hey" || q.includes("help")) {
-      return {
-        text: `Hello! I am your AI Surveillance Assistant grounded in this installation's live data. You can ask me:\n` +
-          `• "What cameras are currently active?"\n` +
-          `• "Show me active incidents."\n` +
-          `• "What happened in Sector Alpha?"\n` +
-          `• "What vehicles were detected?"\n` +
-          `• "Explain Incident INC-2026-0801"\n` +
-          `• "Summarize surveillance status"`,
-      };
-    }
-
-    // Fallback: Truthful statement when no matching records exist
-    return {
-      text: `I searched the live surveillance event database and incident logs for **"${userQuery}"**, but no matching records or evidence were found.\n\nAll my responses are strictly grounded in active SQLite WAL logs to prevent hallucination. Try asking about registered cameras, active incidents, or specific sectors like Sector Alpha.`,
-    };
-  };
-
-  const handleSend = (textToSend?: string) => {
-    const queryText = (textToSend || query).trim();
-    if (!queryText) return;
-
-    const userMsg: GroundedMessage = {
-      id: `usr-${Date.now()}`,
+    const userMsg: ChatItem = {
+      id: `user-${Date.now()}`,
       sender: "user",
-      text: queryText,
+      queryText: q,
       timestamp: new Date().toLocaleTimeString(),
     };
 
@@ -165,168 +65,246 @@ export const IntelligenceView: React.FC = () => {
     setQuery("");
     setIsThinking(true);
 
-    setTimeout(() => {
-      const response = generateGroundedResponse(queryText);
-      const assistantMsg: GroundedMessage = {
+    try {
+      const res = await api.queryIntelligence(q, selectedCameraId || undefined);
+
+      const assistantMsg: ChatItem = {
         id: `asst-${Date.now()}`,
         sender: "assistant",
-        text: response.text,
+        response: {
+          observed_facts: res.observed_facts || [],
+          rule_results: res.rule_results || [],
+          interpretation: res.interpretation || "",
+          is_refusal: res.status === "refused" || res.grounding_status === "refused",
+        },
         timestamp: new Date().toLocaleTimeString(),
-        dataRef: response.dataRef,
       };
+
       setChatHistory((prev) => [...prev, assistantMsg]);
+    } catch (err: any) {
+      const errorMsg: ChatItem = {
+        id: `err-${Date.now()}`,
+        sender: "assistant",
+        plainText: `Query error: ${err.message || "Failed to contact intelligence engine"}`,
+        timestamp: new Date().toLocaleTimeString(),
+      };
+      setChatHistory((prev) => [...prev, errorMsg]);
+    } finally {
       setIsThinking(false);
-    }, 400);
+    }
   };
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-white/10 pb-3">
+      {/* Top Banner */}
+      <div className="flex items-center justify-between flex-wrap gap-3 bg-[#0a0f18] border border-white/10 p-3 rounded-sm">
         <div className="flex items-center gap-2.5">
           <Bot className="w-5 h-5 text-[#00e5ff]" />
           <div>
-            <h2 className="font-display font-bold text-lg tracking-wider text-white">
-              AI OPERATOR ASSISTANT (GROUNDED INTELLIGENCE CONSOLE)
-            </h2>
-            <p className="text-[11px] font-mono-tech text-gray-400">
-              Natural-language question answering grounded in live cameras, detections, incidents, and forensic evidence
+            <h3 className="font-display font-bold text-base tracking-wider text-white">
+              GROUNDED AI SURVEILLANCE ASSISTANT
+            </h3>
+            <p className="font-mono-tech text-[11px] text-gray-400">
+              3-Tier explainable reasoning directly querying verified SQLite database records
             </p>
           </div>
         </div>
 
-        <span className="text-[10px] font-mono-tech px-2.5 py-1 bg-[#00e676]/15 text-[#00e676] border border-[#00e676]/30 rounded flex items-center gap-1">
-          <ShieldCheck size={12} />
-          ANTI-HALLUCINATION GUARDRAILS ACTIVE
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="flex items-center gap-1 text-[10px] font-mono-tech px-2 py-0.5 bg-[#00e676]/15 text-[#00e676] border border-[#00e676]/30 rounded">
+            <ShieldCheck className="w-3 h-3" />
+            <span>ANTI-HALLUCINATION GUARDRAILS ACTIVE</span>
+          </span>
+        </div>
       </div>
 
-      {/* Main 2-Column Chat & Presets Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* Left Column (8 cols): Interactive Grounded Conversation */}
-        <div className="lg:col-span-8 panel p-4 flex flex-col h-[650px]">
-          {/* Chat Messages Stream */}
-          <div className="flex-1 overflow-y-auto space-y-3.5 pr-2 mb-3">
+      {/* Main Chat Layout */}
+      <div className="grid grid-cols-12 gap-4">
+        {/* Left Column (8 cols): Chat Stream */}
+        <div className="col-span-12 lg:col-span-8 bg-[#090d14] border border-white/10 rounded-sm flex flex-col min-h-[640px]">
+          {/* Chat Messages */}
+          <div className="flex-1 p-4 overflow-y-auto space-y-4 max-h-[580px]">
             {chatHistory.map((msg) => (
               <div
                 key={msg.id}
-                className={`flex gap-3 ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex gap-3 ${
+                  msg.sender === "user" ? "justify-end" : "justify-start"
+                }`}
               >
                 {msg.sender === "assistant" && (
-                  <div className="w-7 h-7 rounded bg-[#00e5ff]/20 border border-[#00e5ff]/40 flex items-center justify-center flex-shrink-0 text-[#00e5ff]">
-                    <Bot size={15} />
+                  <div className="w-7 h-7 rounded-sm bg-[#00e5ff]/20 border border-[#00e5ff]/40 flex items-center justify-center shrink-0">
+                    <Bot className="w-4 h-4 text-[#00e5ff]" />
                   </div>
                 )}
 
                 <div
-                  style={{
-                    maxWidth: "85%",
-                    background: msg.sender === "user" ? "rgba(0, 229, 255, 0.12)" : "#090d16",
-                    border: `1px solid ${msg.sender === "user" ? "rgba(0, 229, 255, 0.35)" : "rgba(255, 255, 255, 0.08)"}`,
-                    borderRadius: "6px",
-                    padding: "0.75rem 1rem",
-                  }}
+                  className={`max-w-2xl rounded p-3.5 space-y-2 text-xs ${
+                    msg.sender === "user"
+                      ? "bg-[#14233a] border border-[#00e5ff]/30 text-white"
+                      : "bg-[#060a12] border border-white/10 text-gray-200"
+                  }`}
                 >
-                  <div className="flex justify-between items-center text-[10px] font-mono-tech text-gray-400 mb-1.5 gap-4">
-                    <strong style={{ color: msg.sender === "user" ? "#00e5ff" : "#34d399" }}>
-                      {msg.sender === "user" ? "DUTY OPERATOR" : "SURVEILLANCE AI ASSISTANT"}
-                    </strong>
+                  <div className="flex items-center justify-between text-[10px] font-mono-tech text-gray-400 mb-1 border-b border-white/5 pb-1">
+                    <span className="font-bold uppercase text-[#00e5ff]">
+                      {msg.sender === "user" ? "DUTY OPERATOR" : "GROUNDED AI REASONER"}
+                    </span>
                     <span>{msg.timestamp}</span>
                   </div>
 
-                  <div className="text-xs font-mono-tech text-gray-200 whitespace-pre-line leading-relaxed">
-                    {msg.text}
-                  </div>
+                  {msg.plainText && <p className="font-sans leading-relaxed">{msg.plainText}</p>}
+
+                  {msg.queryText && <p className="font-sans leading-relaxed font-semibold">{msg.queryText}</p>}
+
+                  {msg.response && (
+                    <div className="space-y-3 pt-1">
+                      {msg.response.is_refusal ? (
+                        <div className="p-3 bg-red-500/15 border border-red-500/30 rounded text-red-300 space-y-1">
+                          <div className="flex items-center gap-1.5 font-display font-bold text-red-400">
+                            <AlertCircle className="w-4 h-4" />
+                            <span>GUARDRAIL REFUSAL NOTICE</span>
+                          </div>
+                          <p className="font-sans text-xs">
+                            {msg.response.interpretation}
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          {/* 1. Observed Facts */}
+                          {msg.response.observed_facts.length > 0 && (
+                            <div className="p-2.5 bg-black/40 border border-white/10 rounded space-y-1">
+                              <div className="text-[10px] font-mono-tech font-bold text-[#00e5ff] uppercase flex items-center gap-1">
+                                <Database className="w-3 h-3" />
+                                <span>[OBSERVED FACTS — SQLITE DISK TRUTH]</span>
+                              </div>
+                              <ul className="list-disc pl-4 space-y-0.5 text-gray-300 font-mono-tech text-[11px]">
+                                {msg.response.observed_facts.map((fact, idx) => (
+                                  <li key={idx}>{fact}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* 2. Deterministic Rule Result */}
+                          {msg.response.rule_results.length > 0 && (
+                            <div className="p-2.5 bg-black/40 border border-white/10 rounded space-y-1">
+                              <div className="text-[10px] font-mono-tech font-bold text-[#ffab00] uppercase flex items-center gap-1">
+                                <ShieldCheck className="w-3 h-3" />
+                                <span>[DETERMINISTIC RULE EVALUATION]</span>
+                              </div>
+                              <ul className="list-disc pl-4 space-y-0.5 text-gray-300 font-mono-tech text-[11px]">
+                                {msg.response.rule_results.map((rule, idx) => (
+                                  <li key={idx}>{rule}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* 3. Grounded Interpretation */}
+                          {msg.response.interpretation && (
+                            <div className="p-2.5 bg-[#0a121e] border border-[#00e5ff]/20 rounded space-y-1">
+                              <div className="text-[10px] font-mono-tech font-bold text-emerald-400 uppercase flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>[GROUNDED AI SYNTHESIS]</span>
+                              </div>
+                              <p className="text-gray-100 font-sans text-xs leading-relaxed">
+                                {msg.response.interpretation}
+                              </p>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
 
             {isThinking && (
-              <div className="flex gap-3 justify-start">
-                <div className="w-7 h-7 rounded bg-[#00e5ff]/20 border border-[#00e5ff]/40 flex items-center justify-center text-[#00e5ff]">
-                  <Bot size={15} className="animate-spin" />
-                </div>
-                <div className="bg-[#090d16] border border-white/10 rounded p-3 text-xs font-mono-tech text-gray-400">
-                  Querying live SQLite persistence tables and active detections...
-                </div>
+              <div className="flex items-center gap-2 p-3 text-xs font-mono-tech text-[#00e5ff]">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Querying SQLite WAL database and evaluating deterministic rules...</span>
               </div>
             )}
           </div>
 
-          {/* Chat Input Box */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSend();
-            }}
-            className="flex gap-2 border-t border-white/10 pt-3"
-          >
-            <input
-              type="text"
-              placeholder="Ask questions about cameras, incidents, vehicles, or sector status..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="input flex-1 text-xs"
-            />
-            <button type="submit" disabled={!query.trim() || isThinking} className="btn btn-primary btn-sm" style={{ padding: "0.5rem 1rem" }}>
-              <Send size={14} /> Send
-            </button>
-          </form>
+          {/* Input Box */}
+          <div className="p-3 bg-[#0e141f] border-t border-white/10 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedCameraId}
+                onChange={(e) => setSelectedCameraId(e.target.value)}
+                className="bg-[#060a12] border border-white/10 rounded px-2.5 py-1 text-[11px] font-mono-tech text-gray-300 focus:outline-none focus:border-[#00e5ff]"
+              >
+                <option value="">All Cameras</option>
+                {cameras.map((c) => (
+                  <option key={c.camera_id} value={c.camera_id}>
+                    {c.camera_id} ({c.name})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendQuery();
+              }}
+              className="flex gap-2"
+            >
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Ask grounded questions (e.g. 'What targets crossed the perimeter?')..."
+                className="flex-1 bg-[#060a12] border border-white/10 rounded px-3 py-2 text-xs text-white font-sans focus:outline-none focus:border-[#00e5ff]"
+              />
+              <button
+                type="submit"
+                disabled={isThinking || !query.trim()}
+                className="px-4 py-2 bg-[#00e5ff] hover:bg-[#00cce6] text-black font-display font-bold text-xs rounded flex items-center gap-1.5 transition-colors disabled:opacity-50"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>QUERY</span>
+              </button>
+            </form>
+          </div>
         </div>
 
-        {/* Right Column (4 cols): Grounded Query Presets & Real-Time Context Feed */}
-        <div className="lg:col-span-4 flex flex-col gap-4">
-          {/* Quick Questions Presets */}
-          <div className="panel p-3.5">
-            <div className="panel-title text-xs mb-2.5">
-              <HelpCircle size={14} color="#00e5ff" />
-              Quick Grounded Questions
+        {/* Right Column (4 cols): Preset Queries & Guardrail Explanations */}
+        <div className="col-span-12 lg:col-span-4 space-y-4">
+          <div className="bg-[#090d14] border border-white/10 rounded-sm p-4 space-y-3">
+            <div className="flex items-center gap-2 text-xs font-display font-bold text-white border-b border-white/10 pb-2">
+              <Sparkles className="w-4 h-4 text-[#00e5ff]" />
+              <span>TESTED EVALUATION QUERIES</span>
             </div>
 
             <div className="space-y-1.5">
-              {presetQueries.map((pq, idx) => (
+              {presetQueries.map((preset, idx) => (
                 <button
                   key={idx}
-                  onClick={() => handleSend(pq)}
-                  className="w-full text-left p-2 bg-[#080c14] hover:bg-[#121a29] border border-white/10 hover:border-[#00e5ff]/40 rounded text-[11px] font-mono-tech text-gray-300 hover:text-white transition-all cursor-pointer block"
+                  onClick={() => handleSendQuery(preset)}
+                  className="w-full text-left p-2 bg-[#060a12] hover:bg-[#121a28] border border-white/5 hover:border-[#00e5ff]/40 rounded text-[11px] text-gray-300 font-sans transition-colors"
                 >
-                  "{pq}"
+                  {preset}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Live Context Data Strip */}
-          <div className="panel p-3.5 flex-1 flex flex-col justify-between">
-            <div>
-              <div className="panel-title text-xs mb-2.5">
-                <Database size={14} color="#34d399" />
-                Live Context Knowledge Base
-              </div>
-
-              <div className="space-y-2 text-[11px] font-mono-tech text-gray-400">
-                <div className="flex justify-between p-1.5 bg-[#080c14] rounded border border-white/5">
-                  <span>Registered CCTV Feeds:</span>
-                  <strong className="text-white">{cameras.length} Feeds</strong>
-                </div>
-                <div className="flex justify-between p-1.5 bg-[#080c14] rounded border border-white/5">
-                  <span>Active Incidents Logged:</span>
-                  <strong className="text-[#ff1744]">{incidents.length} Incidents</strong>
-                </div>
-                <div className="flex justify-between p-1.5 bg-[#080c14] rounded border border-white/5">
-                  <span>Tracked Targets:</span>
-                  <strong className="text-[#00e5ff]">{threat?.active_tracks || 5} Targets</strong>
-                </div>
-                <div className="flex justify-between p-1.5 bg-[#080c14] rounded border border-white/5">
-                  <span>Persistence Backend:</span>
-                  <strong className="text-[#00e676]">SQLite WAL</strong>
-                </div>
-              </div>
+          <div className="bg-[#090d14] border border-white/10 rounded-sm p-4 space-y-2 text-xs font-mono-tech text-gray-400">
+            <div className="text-white font-display font-bold text-xs flex items-center gap-1.5 border-b border-white/10 pb-2">
+              <ShieldCheck className="w-4 h-4 text-[#00e676]" />
+              <span>ANTI-HALLUCINATION POLICY</span>
             </div>
-
-            <div className="text-[10px] font-mono-tech text-gray-500 border-t border-white/10 pt-2 mt-3">
-              Architecture: Application Data + Bounding Boxes + Incident Records → AI Grounded Assistant
-            </div>
+            <p className="text-[11px] leading-relaxed">
+              • <strong>No Speculation</strong>: Zero answers are generated without backing database rows.
+            </p>
+            <p className="text-[11px] leading-relaxed">
+              • <strong>Biometric Refusal</strong>: Explicitly refuses identifying individuals or faces.
+            </p>
+            <p className="text-[11px] leading-relaxed">
+              • <strong>Weapon & Intent Refusal</strong>: Refuses weapon presence claims or subjective intent deductions without certified sensors.
+            </p>
           </div>
         </div>
       </div>
