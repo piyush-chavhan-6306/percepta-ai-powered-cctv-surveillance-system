@@ -122,10 +122,25 @@ async def test_concurrency_and_stress_persistence():
         )
         return await store.record_event(event)
 
-    tasks = [record_worker(i) for i in range(50)]
-    results = await asyncio.gather(*tasks)
-    assert len(results) == 50
-    assert all(isinstance(r, int) and r > 0 for r in results)
+    try:
+        tasks = [record_worker(i) for i in range(50)]
+        results = await asyncio.gather(*tasks)
+        assert len(results) == 50
+        assert all(isinstance(r, int) and r > 0 for r in results)
+    finally:
+        # This suite shares one SQLite file with every other test, and these 50
+        # rows carry track_ids "0".."49". The assistant's get_track_events()
+        # matches on track_id alone (IDs are camera-local, so it cannot scope by
+        # camera for a bare "Track 17" question), which means the leftover
+        # track_id="17" alert here silently shadows the seeded fixture in
+        # test_intelligence_assistant -- this file sorts first, so its rows are
+        # already committed by the time those tests run. Clean up after
+        # ourselves rather than leaking state across modules.
+        from sqlalchemy import text
+        factory = get_session_factory()
+        async with factory() as session:
+            await session.execute(text("DELETE FROM event_logs WHERE camera_id = 'cam_stress_test';"))
+            await session.commit()
 
 
 @pytest.mark.asyncio
