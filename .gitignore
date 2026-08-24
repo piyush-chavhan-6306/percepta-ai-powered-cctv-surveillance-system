@@ -1,0 +1,40 @@
+# ---- Python ----
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ---- Node / frontend ----
+node_modules/
+frontend/dist/
+frontend/node_modules/
+
+# ---- Datasets (~10.5 GB — never commit) ----
+VIRAT/
+VisDrone2019-MOT-val/
+moth17/
+datasets/
+
+# ---- Model weights (binary, fetched separately) ----
+models/*.pt
+
+# ---- Runtime state ----
+border_intelligence.db
+border_intelligence.db-shm
+border_intelligence.db-wal
+*.db
+*.db-shm
+*.db-wal
+storage/
+logs/
+*.log
+
+# ---- Secrets ----
+.env
+
+# ---- Editor / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
