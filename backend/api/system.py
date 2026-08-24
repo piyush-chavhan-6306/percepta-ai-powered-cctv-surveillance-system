@@ -13,6 +13,7 @@ from backend.config import get_settings
 from backend.detection.model_loader import detect_hardware_device
 from backend.events.store import get_event_store
 from backend.ingestion.camera_manager import get_camera_manager
+from backend.tracking.live_worker import get_worker_registry
 
 router = APIRouter(prefix="/api/system", tags=["System Observability"])
 
@@ -73,31 +74,39 @@ async def get_system_metrics() -> Dict[str, Any]:
 
     # Rolling camera aggregate metrics
     cap_fps = round(sum(c.get("fps", 30.0) for c in cameras) / max(len(cameras), 1), 1)
-    
+
+    # Every performance number below is measured by the live perception workers.
+    # These were previously hardcoded constants (display_fps 60.0, inference
+    # 42.0 ms, ...) that reported healthy figures no matter what the system was
+    # actually doing -- including when no camera was running at all.
+    perf = get_worker_registry().aggregate_metrics()
+
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "uptime_seconds": uptime_sec,
-        "device": selected_dev,
+        "device": perf.get("device", selected_dev),
         "gpu_available": gpu_avail,
         "gpu_device_name": gpu_name,
         "memory_usage_mb": mem_mb,
         "capture_fps": cap_fps,
-        "ai_processing_fps": round(30.0 / max(settings.DEFAULT_FRAME_STRIDE, 1), 1),
-        "display_fps": 60.0,
-        "effective_visual_fps": 60.0,
-        "inference_latency_ms": 42.0,
-        "tracking_latency_ms": 2.5,
-        "prediction_latency_ms": 1.2,
-        "persistence_latency_ms": 0.4,
-        "encoding_latency_ms": 3.5,
-        "total_pipeline_latency_ms": 46.1,
-        "frame_stride": settings.DEFAULT_FRAME_STRIDE,
+        "ai_processing_fps": perf.get("ai_processing_fps", 0.0),
+        "display_fps": perf.get("display_fps", 0.0),
+        # What the operator actually sees: the annotated MJPEG output rate.
+        "effective_visual_fps": perf.get("display_fps", 0.0),
+        "inference_latency_ms": perf.get("inference_latency_ms", 0.0),
+        "tracking_latency_ms": perf.get("tracking_latency_ms", 0.0),
+        "prediction_latency_ms": perf.get("prediction_latency_ms", 0.0),
+        "persistence_latency_ms": perf.get("persistence_latency_ms", 0.0),
+        "encoding_latency_ms": perf.get("encoding_latency_ms", 0.0),
+        "total_pipeline_latency_ms": perf.get("total_pipeline_latency_ms", 0.0),
+        "frame_stride": perf.get("frame_stride", settings.DEFAULT_FRAME_STRIDE),
         "processed_frames": total_frames,
-        "skipped_frames": 0,
-        "predicted_frames": 0,
+        "skipped_frames": perf.get("skipped_frames", 0),
+        "predicted_frames": perf.get("predicted_frames", 0),
         "dropped_frames": total_dropped,
-        "active_tracks": 0,
+        "active_tracks": perf.get("active_tracks", 0),
         "alerts": db_stats.get("total_alerts", 0),
+        "workers_running": perf.get("workers_running", 0),
         "hardware": {
             "device": selected_dev,
             "gpu_available": gpu_avail,

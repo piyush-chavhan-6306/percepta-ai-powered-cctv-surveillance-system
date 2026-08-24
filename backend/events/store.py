@@ -6,7 +6,8 @@ exponential backoff retry for SQLite write contention, and SQLite persistence us
 import asyncio
 from datetime import datetime
 import logging
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,8 @@ class EventStore:
     def __init__(self, bus: Optional[EventBus] = None, max_retries: int = 5) -> None:
         self.bus = bus or get_event_bus()
         self.max_retries = max_retries
+        self._stats_cache: Optional[Tuple[float, Dict[str, Any]]] = None
+        self._stats_cache_ttl = 2.0
 
     async def record_event(
         self,
@@ -232,8 +235,22 @@ class EventStore:
             return await _exec(local_session)
 
     async def get_system_stats(self, session: Optional[AsyncSession] = None) -> Dict[str, Any]:
-        """Compute high-level event counts and database metrics."""
+        """
+        Compute high-level event counts and database metrics.
+
+        These three COUNT(*) scans grow with the event log (250k+ rows within an
+        hour of live tracking). The dashboard polls this every second, and on
+        SQLite each full scan contends with the perception worker's event writes
+        -- the visible symptom was the MJPEG stream stalling for up to ~2 s every
+        time the counts were recomputed. A short TTL cache collapses a burst of
+        polls into one scan without making the numbers meaningfully stale.
+        """
         from sqlalchemy import func
+
+        now = time.perf_counter()
+        cached = self._stats_cache
+        if cached is not None and (now - cached[0]) < self._stats_cache_ttl:
+            return cached[1]
 
         async def _exec(s: AsyncSession) -> Dict[str, Any]:
             total_events_query = select(func.count(EventLogModel.seq_id))
@@ -251,11 +268,14 @@ class EventStore:
             }
 
         if session is not None:
-            return await _exec(session)
+            stats = await _exec(session)
+        else:
+            factory = get_session_factory()
+            async with factory() as local_session:
+                stats = await _exec(local_session)
 
-        factory = get_session_factory()
-        async with factory() as local_session:
-            return await _exec(local_session)
+        self._stats_cache = (now, stats)
+        return stats
 
     async def acknowledge_alert(self, event_id: str, session: Optional[AsyncSession] = None) -> bool:
         """Mark an alert event or incident as acknowledged."""
