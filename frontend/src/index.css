@@ -1,18 +1,4 @@
 /* ==========================================================================
-   TAILWIND CSS v4 — Required for BorderWatchHero and future Tailwind components
-   ========================================================================== */
-@import "tailwindcss";
-
-/* Surveillance theme tokens used by BorderWatchHero */
-:root {
-  --surveillance-bg: #05090c;
-  --surveillance-accent: #0e2a3d;
-  --alert-red: #e0272a;
-  --color-text: #f5f5f5;
-  --color-text-muted: rgba(245, 245, 245, 0.65);
-}
-
-/* ==========================================================================
    BORDER INTELLIGENCE — DEFENSE COMMAND POST (C2) DESIGN SYSTEM
    High-Density Tactical UI Stylesheet (Vanilla CSS, 0 External Framework Deps)
    ========================================================================== */
