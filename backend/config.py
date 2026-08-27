@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     DEFAULT_INFERENCE_SIZE: int = 640
     CONFIDENCE_THRESHOLD: float = 0.25
     IOU_THRESHOLD: float = 0.45
+    # Inference runs in a worker thread alongside OpenCV decode and JPEG encode.
+    # 0 leaves torch to size its own pool (it takes every core, which trades
+    # frame-time jitter for a marginally higher average). Pin it if the stream
+    # looks uneven.
+    TORCH_NUM_THREADS: int = 0
     TARGET_FPS: float = 25.0
     MIN_FRAME_STRIDE: int = 1
     # Headroom for CPU-only hosts. YOLOv8n costs ~40-70 ms per frame here, so a

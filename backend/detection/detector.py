@@ -6,6 +6,7 @@ and direct integration with the EventStore and EventBus.
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
+import time
 from typing import Any, Dict, List, Optional, Set
 import numpy as np
 
@@ -70,11 +71,43 @@ class ObjectDetector:
         self._is_initialized = False
 
     def initialize(self) -> None:
-        """Load and initialize model weights."""
+        """Load and initialize model weights, then warm the inference graph."""
         if not self._is_initialized:
             self._model = self.loader.load_model(self.model_name, device=self.device)
             self._is_initialized = True
             logger.info(f"ObjectDetector initialized with {self.model_name} on {self.device} (imgsz={self.imgsz})")
+            self.warmup()
+
+    def warmup(self, iterations: int = 2) -> float:
+        """
+        Run throwaway inferences so the first real frame does not pay setup cost.
+
+        Ultralytics builds its predictor lazily on the first call: warmup allocates
+        the tensors, resolves the fuse/stride config, and lets the CPU kernels pick
+        their algorithms. That work costs several hundred ms to seconds and used to
+        land on the operator's first frame as a visible stall right when a demo
+        starts. Paying it here moves the pause to boot, where nobody is watching.
+
+        Returns the last warmup inference time in milliseconds (0.0 if it failed).
+        """
+        if self._model is None:
+            return 0.0
+
+        blank = np.zeros((self.imgsz, self.imgsz, 3), dtype=np.uint8)
+        elapsed_ms = 0.0
+        try:
+            for _ in range(max(1, iterations)):
+                started = time.perf_counter()
+                self.detect(blank)
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+        except Exception as err:
+            # A failed warmup must never stop the server from booting -- the first
+            # real frame will simply pay the cost instead.
+            logger.warning(f"Detector warmup failed (non-fatal): {err}")
+            return 0.0
+
+        logger.info(f"Detector warmup complete: steady-state inference ~{elapsed_ms:.1f} ms")
+        return elapsed_ms
 
     def detect(self, image: np.ndarray) -> List[DetectionResult]:
         """
@@ -181,7 +214,52 @@ global_detector: Optional[ObjectDetector] = None
 
 
 def get_detector() -> ObjectDetector:
+    """
+    Return the process-wide detector, configured from settings.
+
+    This used to be a bare ``ObjectDetector()``, which meant the constructor
+    defaults won every time: inference always ran on "cpu" at imgsz=640 with
+    conf=0.25/iou=0.45, and DEVICE / DEFAULT_INFERENCE_SIZE /
+    CONFIDENCE_THRESHOLD / IOU_THRESHOLD in config.py were dead knobs -- tuning
+    them changed nothing, while /api/system/metrics separately reported the
+    *configured* device and so could claim "cuda" while the detector ran on CPU.
+    Resolving them here makes the configuration real and keeps the reported
+    device honest.
+    """
     global global_detector
     if global_detector is None:
-        global_detector = ObjectDetector()
+        from backend.config import get_settings
+        from backend.detection.model_loader import detect_hardware_device
+
+        settings = get_settings()
+        selected_device, _gpu_available, _gpu_name = detect_hardware_device(settings.DEVICE)
+        _apply_torch_thread_limit(settings.TORCH_NUM_THREADS)
+
+        global_detector = ObjectDetector(
+            model_name=settings.YOLO_MODEL_NAME,
+            conf_threshold=settings.CONFIDENCE_THRESHOLD,
+            iou_threshold=settings.IOU_THRESHOLD,
+            device=selected_device,
+            imgsz=settings.DEFAULT_INFERENCE_SIZE,
+        )
     return global_detector
+
+
+def _apply_torch_thread_limit(num_threads: int) -> None:
+    """
+    Pin torch's intra-op thread count when configured.
+
+    Inference runs inside ``asyncio.to_thread``, so torch's own pool, the asyncio
+    executor, and OpenCV's threads all compete for the same cores. Left to
+    itself torch grabs every core, which on a busy box shows up as frame-time
+    jitter rather than a higher average rate. 0 means "leave torch alone".
+    """
+    if num_threads <= 0:
+        return
+    try:
+        import torch
+
+        torch.set_num_threads(num_threads)
+        logger.info(f"torch intra-op threads pinned to {num_threads}")
+    except Exception as err:
+        logger.warning(f"Could not set torch thread count to {num_threads}: {err}")
