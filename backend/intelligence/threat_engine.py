@@ -60,10 +60,13 @@ class ThreatEngine:
                 recent_alerts.append(a)
 
         # 2. Fetch recent tracking and zone events
+        # newest_first matters even with `since`: a busy window can hold far more
+        # than 200 events, and scoring the oldest 200 of the window lags reality.
         recent_events = await self.store.get_events(
             since=since_time,
             camera_id=camera_id,
             limit=200,
+            newest_first=True,
         )
 
         critical_count = 0

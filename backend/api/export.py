@@ -22,13 +22,20 @@ async def export_events(
 ):
     """
     Export historical surveillance events and forensic logs in structured JSON or CSV format.
+
+    Exports the ``limit`` *most recent* matching events, then presents them
+    oldest-first so the file reads forward in time. Without the recency
+    selection an export from a long-running deployment returns the very first
+    events ever recorded rather than the incident the operator is looking at.
     """
     store = get_event_store()
     events = await store.get_events(
         camera_id=camera_id,
         event_type=event_type,
         limit=limit,
+        newest_first=True,
     )
+    events.reverse()
 
     if format.lower() == "csv":
         output = io.StringIO()

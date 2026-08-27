@@ -35,7 +35,7 @@ class SpatialHeatmapEngine:
         limit: int = 500,
     ) -> HeatmapResponse:
         """Compute normalized 2D density grid for camera coordinates."""
-        events = await self.store.get_events(camera_id=camera_id, limit=limit)
+        events = await self.store.get_events(camera_id=camera_id, limit=limit, newest_first=True)
 
         points = []
         for e in events:

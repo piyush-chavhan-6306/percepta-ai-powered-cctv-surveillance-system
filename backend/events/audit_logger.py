@@ -69,7 +69,7 @@ class AuditLogger:
 
     async def get_audit_logs(self, limit: int = 100) -> List[AuditLogEntry]:
         """Retrieve recent administrative audit log entries."""
-        events = await self.store.get_events(event_type="SYSTEM", limit=limit * 2)
+        events = await self.store.get_events(event_type="SYSTEM", limit=limit * 2, newest_first=True)
         logs = []
         for e in events:
             raw_payload = e.get("payload", {})

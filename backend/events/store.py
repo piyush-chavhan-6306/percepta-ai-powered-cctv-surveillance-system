@@ -110,11 +110,20 @@ class EventStore:
         camera_id: Optional[str] = None,
         event_type: Optional[str] = None,
         limit: int = 100,
+        newest_first: bool = False,
         session: Optional[AsyncSession] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Durable Event Replay API with deterministic ordering:
-        ORDER BY timestamp ASC, seq_id ASC
+        Durable Event Replay API with deterministic ordering.
+
+        Default ordering is ``timestamp ASC, seq_id ASC``: replay clients page
+        forward with ``after_seq`` and need the oldest unseen rows first.
+
+        ``newest_first=True`` flips both keys to DESC for callers that want "the
+        last N events" instead. That distinction is not cosmetic -- the log grows
+        without bound, so an ascending ``limit`` silently returns the oldest rows
+        in the whole database. On a log with 169k rows, a caller asking for 500
+        recent events was reading events from the very first run.
         """
         query = select(EventLogModel)
 
@@ -128,7 +137,11 @@ class EventStore:
             query = query.where(EventLogModel.event_type == event_type)
 
         # Deterministic tie-breaking sequence
-        query = query.order_by(EventLogModel.timestamp.asc(), EventLogModel.seq_id.asc()).limit(limit)
+        if newest_first:
+            query = query.order_by(EventLogModel.timestamp.desc(), EventLogModel.seq_id.desc())
+        else:
+            query = query.order_by(EventLogModel.timestamp.asc(), EventLogModel.seq_id.asc())
+        query = query.limit(limit)
 
         async def _exec(s: AsyncSession) -> List[Dict[str, Any]]:
             result = await s.execute(query)
