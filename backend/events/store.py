@@ -223,7 +223,19 @@ class EventStore:
                     "confidence": row.confidence,
                     "source": row.source,
                     "payload": row.payload,
+                    "message": None,
+                    "severity": None,
+                    "is_acknowledged": False,
                 }
+                if row.payload:
+                    try:
+                        p_data = json.loads(row.payload)
+                        if isinstance(p_data, dict):
+                            item["message"] = p_data.get("message")
+                            item["severity"] = p_data.get("severity")
+                            item["is_acknowledged"] = p_data.get("is_acknowledged", False)
+                    except Exception:
+                        pass
                 alerts.append(item)
             return alerts
 

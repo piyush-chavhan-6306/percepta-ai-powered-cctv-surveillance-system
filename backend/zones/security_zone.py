@@ -232,7 +232,9 @@ class ZoneMonitor:
                 if zone.target_classes and track.object_class not in zone.target_classes:
                     continue
 
-                is_inside = zone.contains_point(curr_pos)
+                is_inside = zone.contains_point(curr_pos) or (
+                    hasattr(track, "bbox") and track.bbox and len(track.bbox) >= 4 and zone.contains_point((track.center_x, float(track.bbox[3])))
+                )
                 was_inside = self._track_zone_state[t_id].get(z_id, False)
 
                 if is_inside and not was_inside:
