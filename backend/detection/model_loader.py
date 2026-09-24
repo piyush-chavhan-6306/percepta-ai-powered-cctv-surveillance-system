@@ -39,6 +39,15 @@ class ModelLoader:
         target_name = model_name or self.default_model
         model_path = self.get_model_path(target_name)
 
+        # On CPU, prefer optimized ONNX Runtime model if available
+        onnx_path = self.models_dir / "detection" / "yolov8n.onnx"
+        if device == "cpu" and onnx_path.exists() and (model_name is None or "onnx" in model_name or "pt" in model_name):
+            logger.info(f"Loading high-speed ONNX Runtime YOLO model: {onnx_path}")
+            try:
+                return YOLO(str(onnx_path), task="detect")
+            except Exception as ex:
+                logger.warning(f"Failed to load ONNX model ({ex}), falling back to PyTorch weights")
+
         if model_path.exists():
             logger.info(f"Loading cached YOLO model from: {model_path}")
             model = YOLO(str(model_path))

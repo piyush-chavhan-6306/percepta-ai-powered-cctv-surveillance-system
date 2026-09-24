@@ -1,0 +1,58 @@
+{
+  "presets": [
+    {
+      "vendor": "Hikvision",
+      "model": "DS-2CD Series / TurboHD PTZ",
+      "protocol": "rtsp",
+      "default_port": 554,
+      "uri_template": "rtsp://{username}:{password}@{ip}:{port}/Streaming/Channels/{channel}01",
+      "description": "Standard Hikvision primary RTSP stream (101 = Ch1 Main, 102 = Ch1 Substream)",
+      "recommended_transport": "tcp"
+    },
+    {
+      "vendor": "Dahua",
+      "model": "IPC-HFW / PTZ Series",
+      "protocol": "rtsp",
+      "default_port": 554,
+      "uri_template": "rtsp://{username}:{password}@{ip}:{port}/cam/realmonitor?channel={channel}&subtype=0",
+      "description": "Dahua mainstream channel profile (subtype=0 for main high-def, subtype=1 for sub)",
+      "recommended_transport": "tcp"
+    },
+    {
+      "vendor": "TP-Link Tapo",
+      "model": "C200 / C310 / C500 Outdoor",
+      "protocol": "rtsp",
+      "default_port": 554,
+      "uri_template": "rtsp://{username}:{password}@{ip}:{port}/stream1",
+      "description": "TP-Link Tapo border outpost optical stream (stream1=1080p/2K, stream2=360p)",
+      "recommended_transport": "tcp"
+    },
+    {
+      "vendor": "Axis Communications",
+      "model": "Q16 / P13 / Q19 Thermal",
+      "protocol": "rtsp",
+      "default_port": 554,
+      "uri_template": "rtsp://{username}:{password}@{ip}:{port}/axis-media/media.amp",
+      "description": "Axis standard H.264/H.265 high-resolution RTSP endpoint",
+      "recommended_transport": "tcp"
+    },
+    {
+      "vendor": "Uniview / UNV",
+      "model": "IPC Series",
+      "protocol": "rtsp",
+      "default_port": 554,
+      "uri_template": "rtsp://{username}:{password}@{ip}:{port}/unicast/c{channel}/s0/live",
+      "description": "Uniview primary RTSP stream",
+      "recommended_transport": "tcp"
+    },
+    {
+      "vendor": "Generic ONVIF / RTSP",
+      "model": "Profile S / T Compliant",
+      "protocol": "rtsp",
+      "default_port": 554,
+      "uri_template": "rtsp://{username}:{password}@{ip}:{port}/live",
+      "description": "Generic RTSP IP surveillance camera fallback",
+      "recommended_transport": "tcp"
+    }
+  ]
+}

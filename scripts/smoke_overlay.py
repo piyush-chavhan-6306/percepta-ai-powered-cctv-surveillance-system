@@ -28,7 +28,7 @@ from backend.zones.security_zone import (  # noqa: E402
     ZoneSeverity,
 )
 
-CLIP = "VIRAT/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4"
+CLIP = "dataset/surveillance/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4"
 FRAMES = 150
 SAVE_AT = {50, 100, 149}
 OUT_DIR = Path("smoke_out")

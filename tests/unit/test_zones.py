@@ -131,3 +131,64 @@ def test_zone_monitor_virtual_boundary_crossing_event():
     assert z_evs2[0].zone_id == "line_border_1"
     assert len(a_evs2) == 1
     assert "BORDER BREACH" in a_evs2[0].message
+
+
+def test_virtual_boundary_cardinal_direction_filtering():
+    """Verify that tripwires with explicit cardinal direction only trigger for matching movement vectors."""
+    # Horizontal tripwire at y=300, requiring SOUTH movement (dy > 0)
+    south_boundary = VirtualBoundary(
+        boundary_id="south_wire",
+        name="Southbound Tripwire",
+        pt1=(50.0, 300.0),
+        pt2=(550.0, 300.0),
+        direction="SOUTH",
+    )
+
+    # Moving SOUTH (from y=250 down to y=350) -> Should trigger
+    res_south = south_boundary.check_crossing(prev_point=(200.0, 250.0), curr_point=(200.0, 350.0))
+    assert res_south == "SOUTH"
+
+    # Moving NORTH (from y=350 up to y=250) -> Must NOT trigger
+    res_north = south_boundary.check_crossing(prev_point=(200.0, 350.0), curr_point=(200.0, 250.0))
+    assert res_north is None
+
+    # Vertical tripwire at x=400, requiring EAST movement (dx > 0)
+    east_boundary = VirtualBoundary(
+        boundary_id="east_wire",
+        name="Eastbound Tripwire",
+        pt1=(400.0, 50.0),
+        pt2=(400.0, 550.0),
+        direction="EAST",
+    )
+
+    # Moving EAST (from x=350 to x=450) -> Should trigger
+    assert east_boundary.check_crossing(prev_point=(350.0, 200.0), curr_point=(450.0, 200.0)) == "EAST"
+
+    # Moving WEST (from x=450 to x=350) -> Must NOT trigger
+    assert east_boundary.check_crossing(prev_point=(450.0, 200.0), curr_point=(350.0, 200.0)) is None
+
+
+def test_virtual_boundary_per_track_debounce():
+    """Verify that multiple crossing evaluations in rapid succession are debounced per track."""
+    boundary = VirtualBoundary(
+        boundary_id="wire_debounce",
+        name="Debounced Tripwire",
+        pt1=(0.0, 200.0),
+        pt2=(600.0, 200.0),
+        debounce_seconds=5.0,
+    )
+    monitor = ZoneMonitor(boundaries=[boundary])
+
+    # Frame 1: Track 99 at (300, 180)
+    t99_f1 = _make_track("99", 300.0, 180.0)
+    monitor.evaluate_tracks([t99_f1], camera_id="cam_01")
+
+    # Frame 2: Track 99 crosses at (300, 220) -> Should alert
+    t99_f2 = _make_track("99", 300.0, 220.0)
+    _, a_evs2 = monitor.evaluate_tracks([t99_f2], camera_id="cam_01")
+    assert len(a_evs2) == 1
+
+    # Frame 3: Track 99 hovers and crosses back at (300, 190) immediately -> Debounced, no alert!
+    t99_f3 = _make_track("99", 300.0, 190.0)
+    _, a_evs3 = monitor.evaluate_tracks([t99_f3], camera_id="cam_01")
+    assert len(a_evs3) == 0

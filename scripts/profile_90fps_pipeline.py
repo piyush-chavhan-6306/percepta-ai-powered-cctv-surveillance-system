@@ -34,7 +34,7 @@ async def run_profiling(num_frames: int = 100):
     store = get_event_store()
     bus = get_event_bus()
 
-    video_path = Path("VIRAT/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4")
+    video_path = Path("dataset/surveillance/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4")
     assert video_path.exists(), f"Missing video: {video_path}"
 
     cap = cv2.VideoCapture(str(video_path))

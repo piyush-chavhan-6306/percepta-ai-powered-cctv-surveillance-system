@@ -80,8 +80,8 @@ async def test_full_pipeline_yolo_to_bytetrack_to_eventstore_to_replay():
     positions = [
         (100.0, 100.0, 160.0, 160.0),  # Frame 1: center (130, 130) - outside zone
         (115.0, 120.0, 175.0, 180.0),  # Frame 2: center (145, 150) - outside zone
-        (130.0, 140.0, 190.0, 200.0),  # Frame 3: center (160, 170) - inside zone [(150,150) to (350,350)]
-        (145.0, 165.0, 205.0, 225.0),  # Frame 4: center (175, 195) - dwelling inside zone
+        (135.0, 145.0, 195.0, 205.0),  # Frame 3: center (165, 175) - inside zone [(150,150) to (350,350)]
+        (150.0, 165.0, 210.0, 225.0),  # Frame 4: center (180, 195) - dwelling inside zone
         (160.0, 190.0, 220.0, 250.0),  # Frame 5: center (190, 220) - north of line y=250
         (175.0, 215.0, 235.0, 275.0),  # Frame 6: center (205, 245) - north of line y=250
         (190.0, 240.0, 250.0, 300.0),  # Frame 7: center (220, 270) - south of line y=250 (crossed!)

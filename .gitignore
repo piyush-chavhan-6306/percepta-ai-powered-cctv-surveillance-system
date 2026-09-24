@@ -10,14 +10,16 @@ node_modules/
 frontend/dist/
 frontend/node_modules/
 
-# ---- Datasets (~10.5 GB — never commit) ----
-VIRAT/
-VisDrone2019-MOT-val/
-moth17/
+# ---- Datasets (~10 GB — never commit raw data) ----
+dataset/
 datasets/
 
-# ---- Model weights (binary, fetched separately) ----
-models/*.pt
+# ---- Model weights (binary, fetched separately via scripts/download_models.py) ----
+models/
+yolov8n.pt
+*.pt
+*.onnx
+*.bin
 
 # ---- Runtime state ----
 border_intelligence.db
@@ -26,15 +28,39 @@ border_intelligence.db-wal
 *.db
 *.db-shm
 *.db-wal
+*.db.*
+*.backup*
 storage/
 logs/
 *.log
+scratch/
+runtime/
 
 # ---- Secrets ----
 .env
+.env.*
+!.env.example
 
-# ---- Editor / OS ----
+# ---- Editor / OS / IDE agents ----
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+.agents/
+.agent/
+agent/
+.claude/
+.freebuff/
+.playwright-cli/
+graphify-out/
+
+# ---- Reference Clones & Temporary Artifacts ----
+AI-Driven-Border-Security-and-Strategic-Management-System-main/
+VigilAI-Smart-Border-Surveillance-System-main/
+hub-main/
+Ultralytics/
+*.png
+*.jpg
+*.jpeg
+*.mp3
+!frontend/public/**

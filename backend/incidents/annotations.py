@@ -72,13 +72,13 @@ class AnnotationManager:
             timestamp=ann.timestamp,
         )
 
-        # Store using event_log model
-        from backend.incidents.models import EventLogModel
+        # Store using normalized Event model
         from backend.database import get_session_factory
+        from backend.database.schema import Event
 
         factory = get_session_factory()
         async with factory() as session:
-            row = EventLogModel(
+            row = Event(
                 event_id=str(event.event_id),
                 event_type=event.event_type.value,
                 timestamp=event.timestamp,
@@ -86,7 +86,7 @@ class AnnotationManager:
                 incident_id=incident_id,
                 confidence=1.0,
                 source=event.source.value,
-                payload=json.dumps(payload_dict),
+                meta=payload_dict,
             )
             session.add(row)
             await session.commit()

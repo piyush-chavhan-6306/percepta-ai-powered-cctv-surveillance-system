@@ -1,0 +1,50 @@
+# Datasets (~10 GB) — Excluded from Vercel deployment
+dataset/
+datasets/
+
+# Heavy AI model weights (ONNX / PT) — Served via edge/inference service
+models/*.pt
+models/*.onnx
+models/anpr/
+models/yolov8n_openvino_model/
+yolov8n.pt
+
+# Runtime storage & database files
+storage/
+*.db
+*.db-shm
+*.db-wal
+*.db.*
+*.backup*
+percepta.db
+test_percepta.db
+
+# Virtual environments & node dependencies
+venv/
+node_modules/
+frontend/node_modules/
+
+# Reference clones & development directories
+AI-Driven-Border-Security-and-Strategic-Management-System-main/
+VigilAI-Smart-Border-Surveillance-System-main/
+hub-main/
+
+# Testing & agent logs
+.git/
+.vscode/
+.planning/
+.agents/
+.agent/
+.claude/
+.pytest_cache/
+tests/
+scratch/
+graphify-out/
+logs/
+*.log
+
+# Artifact & development screenshots
+*.png
+*.jpg
+*.jpeg
+*.mp3

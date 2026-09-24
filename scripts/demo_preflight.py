@@ -65,7 +65,7 @@ async def run_preflight() -> bool:
         results["YOLOv8 Model"] = f"FAIL ({err})"
 
     # 4. Demo Video File Check
-    demo_video = Path("VIRAT/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4")
+    demo_video = Path("dataset/surveillance/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4")
     if demo_video.exists():
         results["Demo Video"] = f"PASS ({demo_video.stat().st_size // (1024*1024)} MB)"
     else:

@@ -39,3 +39,16 @@ async def test_rtsp_adapter_empty_url_raises():
     adapter = RTSPAdapter(camera_id="cam_empty", rtsp_url="")
     with pytest.raises(ValueError, match="Empty RTSP URL"):
         await adapter.start()
+
+
+@pytest.mark.asyncio
+async def test_rtsp_adapter_zero_lag_stream_info():
+    adapter = RTSPAdapter(
+        camera_id="cam_buffered",
+        rtsp_url="rtsp://operator:borderpass@10.0.0.50:554/h264",
+        enable_zero_lag=True,
+    )
+    info = adapter.get_stream_info()
+    assert info["zero_lag_buffered"] is True
+    await adapter.stop()
+    assert adapter._is_running is False

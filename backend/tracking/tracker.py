@@ -27,11 +27,27 @@ class TrackedObject:
     timestamp: datetime
     center_x: float
     center_y: float
+    prev_center_x: float = 0.0
+    prev_center_y: float = 0.0
     velocity: tuple[float, float] = (0.0, 0.0)  # (dx, dy) in pixels/frame
     speed_px_per_frame: float = 0.0
     direction_deg: float = 0.0  # [0, 360) where 0 = East, 90 = South (image coords)
+    cardinal_heading: str = "STATIONARY"  # "N", "NE", "E", "SE", "S", "SW", "W", "NW", "STATIONARY"
+    speed_description: str = "Stationary"  # e.g., "Moving (Estimated)", "Stationary"
     lifecycle: str = "updated"  # "created", "updated", "lost", "recovered", "terminated"
     trajectory: List[tuple[float, float]] = field(default_factory=list)  # Recent [(cx, cy), ...]
+    current_zone: Optional[str] = None
+    previous_zone: Optional[str] = None
+    zone_entry_time: Optional[datetime] = None
+    zone_dwell_seconds: float = 0.0
+    movement_state: str = "STATIONARY"  # "STATIONARY", "MOVING", "APPROACHING_RESTRICTED", "LOITERING"
+    heading_towards_protected: bool = False
+    is_night_movement: bool = False
+    threat_score: float = 0.0
+    # Cross-camera person identity (Re-ID layer). Empty for vehicles and
+    # unconfirmed persons. See backend/tracking/reid_manager.py.
+    global_person_id: str = ""
+    global_person_confirmed: bool = False
     hits: int = 1
     age: int = 1
     time_since_update: int = 0
@@ -40,6 +56,10 @@ class TrackedObject:
     @property
     def center(self) -> tuple[float, float]:
         return (self.center_x, self.center_y)
+
+    @property
+    def previous_center(self) -> tuple[float, float]:
+        return (self.prev_center_x, self.prev_center_y)
 
 
 class BaseTracker(ABC):

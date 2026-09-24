@@ -11,6 +11,7 @@ import type {
   CameraRecord,
   CoverageReport,
   DatabaseDiagnostics,
+  EvidenceVerificationResult,
   ForensicVerificationResult,
   GroundedIntelligenceResponse,
   HeatmapResponse,
@@ -28,14 +29,115 @@ import type {
   ZonesListResponse,
 } from "../types/surveillance";
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-export const WS_BASE_URL = import.meta.env.VITE_WS_URL || "ws://127.0.0.1:8000/ws/events";
+function getComputedApiBaseUrl(): string {
+  if (typeof window !== "undefined") {
+    const saved = localStorage.getItem("percepta_backend_url");
+    if (saved && saved.trim()) {
+      return saved.trim().replace(/\/+$/, "");
+    }
+  }
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL.replace(/\/+$/, "");
+  }
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host !== "localhost" && host !== "127.0.0.1") {
+      return "";
+    }
+  }
+  return "http://127.0.0.1:8000";
+}
+
+function getComputedWsBaseUrl(): string {
+  if (typeof window !== "undefined") {
+    const savedWs = localStorage.getItem("percepta_ws_url");
+    if (savedWs && savedWs.trim()) {
+      return savedWs.trim();
+    }
+    const savedBackend = localStorage.getItem("percepta_backend_url");
+    if (savedBackend && savedBackend.trim()) {
+      try {
+        const u = new URL(savedBackend.trim());
+        const proto = u.protocol === "https:" ? "wss:" : "ws:";
+        return `${proto}//${u.host}/ws/events`;
+      } catch {}
+    }
+  }
+  if (import.meta.env.VITE_WS_URL) {
+    return import.meta.env.VITE_WS_URL;
+  }
+  if (import.meta.env.VITE_API_URL) {
+    try {
+      const u = new URL(import.meta.env.VITE_API_URL);
+      const proto = u.protocol === "https:" ? "wss:" : "ws:";
+      return `${proto}//${u.host}/ws/events`;
+    } catch {}
+  }
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host !== "localhost" && host !== "127.0.0.1") {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return `${proto}//${window.location.host}/ws/events`;
+    }
+  }
+  return "ws://127.0.0.1:8000/ws/events";
+}
+
+export const API_BASE_URL = getComputedApiBaseUrl();
+export const WS_BASE_URL = getComputedWsBaseUrl();
+
+export interface ApiClientError extends Error {
+  status?: number;
+  statusText?: string;
+  url?: string;
+  endpoint?: string;
+  isNetworkError?: boolean;
+}
 
 class ApiClient {
   private baseUrl: string;
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;
+  }
+
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  setBaseUrl(newUrl: string) {
+    const cleaned = (newUrl || "").trim().replace(/\/+$/, "");
+    this.baseUrl = cleaned;
+    if (typeof window !== "undefined") {
+      if (cleaned) {
+        localStorage.setItem("percepta_backend_url", cleaned);
+      } else {
+        localStorage.removeItem("percepta_backend_url");
+      }
+    }
+  }
+
+  async probeHealth(targetUrl?: string): Promise<{ ok: boolean; status: number; service?: string; error?: string }> {
+    const base = targetUrl !== undefined ? targetUrl.replace(/\/+$/, "") : this.baseUrl;
+    const url = `${base}/api/health`;
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (response.ok) {
+        const data = await response.json();
+        return { ok: true, status: response.status, service: data.service || "PERCEPTA Gateway" };
+      }
+      return { ok: false, status: response.status, error: `HTTP ${response.status} ${response.statusText}` };
+    } catch (err: any) {
+      const isAbort = err.name === "AbortError";
+      return {
+        ok: false,
+        status: 0,
+        error: isAbort ? "Request timed out (3.0s)" : err.message || "Connection refused / network unreachable",
+      };
+    }
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -57,10 +159,20 @@ class ApiClient {
         } catch {
           // ignore json parse error
         }
-        throw new Error(errorDetail);
+        const err = new Error(errorDetail) as ApiClientError;
+        err.status = response.status;
+        err.statusText = response.statusText;
+        err.url = url;
+        err.endpoint = endpoint;
+        throw err;
       }
       return (await response.json()) as T;
     } catch (err: any) {
+      if (!err.status) {
+        err.isNetworkError = true;
+        err.endpoint = endpoint;
+        err.url = url;
+      }
       console.error(`API Error on [${options.method || "GET"}] ${endpoint}:`, err.message);
       throw err;
     }
@@ -126,7 +238,9 @@ class ApiClient {
     name?: string;
     source_type: string;
     source_url?: string;
+    file_path?: string;
     location_label?: string;
+    modality?: string;
     fps?: number;
     loop?: boolean;
     device_index?: number;
@@ -145,14 +259,26 @@ class ApiClient {
       body: formData,
     }).then(async (res) => {
       if (!res.ok) {
-        let err = `HTTP ${res.status}`;
+        let errText = `HTTP ${res.status} ${res.statusText}`;
         try {
           const body = await res.json();
-          if (body.detail) err = body.detail;
+          if (body.detail) errText = body.detail;
         } catch {}
-        throw new Error(err);
+        const err = new Error(errText) as ApiClientError;
+        err.status = res.status;
+        err.statusText = res.statusText;
+        err.url = url;
+        err.endpoint = "/api/cameras/upload";
+        throw err;
       }
       return res.json() as Promise<CameraRecord>;
+    }).catch((err) => {
+      if (!err.status) {
+        err.isNetworkError = true;
+        err.endpoint = "/api/cameras/upload";
+        err.url = url;
+      }
+      throw err;
     });
   }
 
@@ -176,12 +302,38 @@ class ApiClient {
     return this.request<{ camera_id: string; status: string }>(`/api/cameras/${cameraId}`, { method: "DELETE" });
   }
 
+  pauseAnalysis(cameraId: string) {
+    return this.request<{ camera_id: string; status: string }>(`/api/cameras/${cameraId}/pause`, { method: "POST" });
+  }
+
+  resumeAnalysis(cameraId: string) {
+    return this.request<{ camera_id: string; status: string }>(`/api/cameras/${cameraId}/resume`, { method: "POST" });
+  }
+
   getCameraDiagnostics(cameraId: string) {
     return this.request<CameraDiagnostics>(`/api/cameras/${cameraId}/diagnostics`);
   }
 
   getCameraHeatmap(cameraId: string) {
     return this.request<HeatmapResponse>(`/api/cameras/${cameraId}/heatmap`);
+  }
+
+  getCameraMetrics(cameraId: string) {
+    return this.request<{
+      camera_id: string;
+      source_fps: number;
+      display_fps: number;
+      inference_fps: number;
+      inference_latency_ms: number;
+      device: string;
+      active_provider: string;
+      track_count: number;
+      worker_running: boolean;
+      published_frames: number;
+      read_latency_ms: number;
+      encoding_latency_ms: number;
+      last_error: string | null;
+    }>(`/api/cameras/${cameraId}/metrics`);
   }
 
   // === Alerts & Incidents ===
@@ -196,6 +348,12 @@ class ApiClient {
 
   acknowledgeAlert(alertId: string) {
     return this.request<{ event_id: string; status: string }>(`/api/alerts/${alertId}/ack`, {
+      method: "POST",
+    });
+  }
+
+  clearAlerts() {
+    return this.request<{ status: string; message: string }>("/api/alerts/clear", {
       method: "POST",
     });
   }
@@ -235,7 +393,7 @@ class ApiClient {
   }
 
   createZone(data: {
-    zone_id: string;
+    zone_id?: string;
     name: string;
     polygon: number[][];
     severity: string;
@@ -248,11 +406,12 @@ class ApiClient {
   }
 
   createBoundary(data: {
-    boundary_id: string;
+    boundary_id?: string;
     name: string;
     pt1: [number, number];
     pt2: [number, number];
     severity: string;
+    direction?: string;
   }) {
     return this.request<any>("/api/zones/boundary", {
       method: "POST",
@@ -283,6 +442,10 @@ class ApiClient {
 
   verifyEvent(eventId: string) {
     return this.request<ForensicVerificationResult>(`/api/evidence/verify/${eventId}`);
+  }
+
+  verifyEvidenceRecord(identifier: string) {
+    return this.request<EvidenceVerificationResult>(`/api/evidence/verify-record/${encodeURIComponent(identifier)}`);
   }
 
   auditIntegrity(limit: number = 200) {
@@ -335,6 +498,10 @@ class ApiClient {
   // === Stream URLs ===
   getVideoStreamUrl(cameraId: string) {
     return `${this.baseUrl}/api/stream/video/${cameraId}`;
+  }
+
+  getCameraVideoFileUrl(cameraId: string) {
+    return `${this.baseUrl}/api/cameras/${cameraId}/video`;
   }
 
   getRawStreamUrl(cameraId: string) {

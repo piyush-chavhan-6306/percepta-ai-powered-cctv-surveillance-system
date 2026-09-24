@@ -2,15 +2,33 @@
 Border Intelligence Main FastAPI Application.
 Initializes lifespan lifecycle, database connections, event bus, API gateway, and REST/WebSocket routers.
 """
+import sys
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
+
+import cv2
+try:
+    cv2.ocl.setUseOpenCL(False)
+except Exception:
+    pass
+
 from contextlib import asynccontextmanager
 import logging
+from pathlib import Path
 from typing import AsyncGenerator
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 
 from backend.api.alerts import router as alerts_router
 from backend.api.cameras import DEFAULT_DEMO_CLIP, resolve_video_path, router as cameras_router
+from backend.api.entities import router as entities_router
 from backend.api.events import router as events_router
 from backend.api.export import router as export_router
 from backend.api.forensics import router as forensics_router
@@ -21,6 +39,7 @@ from backend.api.sensors import router as sensors_router
 from backend.api.streaming import router as streaming_router
 from backend.api.system import router as system_router
 from backend.api.threat import router as threat_router
+from backend.api.topology import router as topology_router
 from backend.api.zones import router as zones_router
 from backend.config import get_settings
 from backend.database import close_db, init_db
@@ -37,17 +56,12 @@ logger = logging.getLogger(__name__)
 DEMO_CAMERA_ID = "CAM-01"
 
 
-async def bootstrap_demo_camera() -> None:
+async def bootstrap_demo_camera(autostart: bool = False) -> None:
     """
-    Register and start the bundled demo clip on startup.
-
-    Best-effort: a missing dataset must not stop the server from booting, since
-    the operator can still add a webcam, an RTSP URL, or an upload from the UI.
+    Register default surveillance cameras in inventory in standby state.
+    Perception starts only when the operator explicitly starts analysis.
     """
     manager = get_camera_manager()
-    if manager.get_camera(DEMO_CAMERA_ID) is not None:
-        return
-
     clip = resolve_video_path(DEFAULT_DEMO_CLIP)
     if clip is None:
         logger.warning(
@@ -56,26 +70,38 @@ async def bootstrap_demo_camera() -> None:
         )
         return
 
-    try:
-        adapter = VideoFileAdapter(
-            camera_id=DEMO_CAMERA_ID,
-            video_path=clip,
-            loop=True,  # loop so an unattended demo never runs dry
-        )
-        manager.register_camera(
-            camera_id=DEMO_CAMERA_ID,
-            adapter=adapter,
-            name="Sector 7 — North Perimeter",
-            location_label="Border Post Alpha",
-            source_type=SourceType.VIDEO_FILE,
-        )
-        if await manager.start_camera(DEMO_CAMERA_ID):
-            await get_worker_registry().start_worker(DEMO_CAMERA_ID)
-            logger.info(f"Demo camera '{DEMO_CAMERA_ID}' live on {clip}")
-        else:
-            await manager.deregister_camera(DEMO_CAMERA_ID)
-    except Exception as err:
-        logger.warning(f"Demo camera bootstrap failed: {err}")
+    configs = [
+        ("CAM-01", "Border Post Alpha (Optical CCTV)", "Sector 7 Perimeter", "STANDARD"),
+    ]
+
+    for cid, name, loc, mod in configs:
+        if manager.get_camera(cid) is not None:
+            continue
+        try:
+            adapter = VideoFileAdapter(
+                camera_id=cid,
+                video_path=clip,
+                loop=True,
+                modality=mod,
+            )
+            manager.register_camera(
+                camera_id=cid,
+                adapter=adapter,
+                name=name,
+                location_label=loc,
+                modality=mod,
+                source_type=SourceType.VIDEO_FILE,
+            )
+            if autostart:
+                if await manager.start_camera(cid):
+                    await get_worker_registry().start_worker(cid)
+                    logger.info(f"Multi-Modal Camera '{cid}' [{mod}] live on {clip}")
+                else:
+                    await manager.deregister_camera(cid)
+            else:
+                logger.info(f"Registered camera '{cid}' in STANDBY mode (ready for operator activation).")
+        except Exception as err:
+            logger.warning(f"Camera bootstrap failed for {cid}: {err}")
 
 
 @asynccontextmanager
@@ -90,10 +116,63 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 2. Log Gateway Status Banner
     log_gateway_startup_banner()
 
-    # 3. Bring up the demo camera so the dashboard has live, real video on load
-    #    rather than an empty grid the operator has to populate by hand.
-    if settings.AUTOSTART_DEMO_CAMERA:
-        await bootstrap_demo_camera()
+    # 2b. Ensure EventBus to WebSocket broadcast is pre-subscribed
+    try:
+        from backend.api.streaming import ws_manager
+        from backend.events.bus import get_event_bus
+        bus = get_event_bus()
+        if not ws_manager._subscribed:
+            await bus.subscribe(ws_manager._broadcast_event)
+            ws_manager._subscribed = True
+    except Exception as ws_sub_err:
+        logger.warning(f"Failed to pre-subscribe ws_manager: {ws_sub_err}")
+
+    # 2b-ii. Subscribe EvidenceBridge: ALERT events → Incident + Evidence DB records
+    try:
+        from backend.events.evidence_bridge import get_evidence_bridge
+        bridge = get_evidence_bridge()
+        await bridge.subscribe()
+    except Exception as eb_err:
+        logger.warning(f"Failed to subscribe EvidenceBridge: {eb_err}")
+
+    # 2c. Ensure default tactical security perimeter zones exist if none defined
+    try:
+        from backend.zones.security_zone import get_zone_monitor, SecurityZone, VirtualBoundary, ZoneSeverity
+        zone_mon = get_zone_monitor()
+        # Preserve old demo definitions on disk but never activate them in an
+        # operator session. Operators explicitly create the rules they need.
+        for demo_id in ("BORDER_RESTRICTED_STRIP_01", "VIRTUAL_PERIMETER_FENCE_01"):
+            demo_rule = zone_mon.zones.get(demo_id) or zone_mon.boundaries.get(demo_id)
+            if demo_rule is not None:
+                demo_rule.is_active = False
+        if settings.AUTO_CREATE_DEMO_ZONES and len(zone_mon.zones) == 0 and len(zone_mon.boundaries) == 0:
+            zone_mon.add_zone(
+                SecurityZone(
+                    zone_id="SECTOR_NORTH_PERIMETER_01",
+                    name="North Fence Restricted Perimeter",
+                    polygon=[[150.0, 180.0], [1400.0, 180.0], [1400.0, 750.0], [150.0, 750.0]],
+                    severity=ZoneSeverity.RESTRICTED,
+                    loitering_threshold_seconds=3.5,
+                    loitering_debounce_seconds=15.0,
+                )
+            )
+            zone_mon.add_boundary(
+                VirtualBoundary(
+                    boundary_id="PERIMETER_GATE_TRIPWIRE_01",
+                    name="Perimeter Access Gate Tripwire",
+                    pt1=(180.0, 480.0),
+                    pt2=(1350.0, 480.0),
+                    severity=ZoneSeverity.CRITICAL,
+                    direction="BIDIRECTIONAL",
+                    debounce_seconds=5.0,
+                )
+            )
+            logger.info("Initialized default tactical perimeter zones and tripwire.")
+    except Exception as zm_err:
+        logger.warning(f"Failed to initialize default zones: {zm_err}")
+
+    # 3. Register default camera in inventory (standby by default)
+    await bootstrap_demo_camera(autostart=settings.AUTOSTART_DEMO_CAMERA)
 
     yield
 
@@ -126,6 +205,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
+        allow_origin_regex=r"https://.*\.vercel\.app",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -148,16 +228,64 @@ def create_app() -> FastAPI:
     app.include_router(sensors_router)
     app.include_router(system_router)
     app.include_router(streaming_router)
+    app.include_router(topology_router)
+    app.include_router(entities_router)
 
-    @app.get("/")
-    async def root():
-        return {
-            "name": settings.APP_NAME,
-            "status": "online",
-            "docs_url": "/docs",
-            "health_url": "/api/health",
-            "auth_status": "demo_mode" if settings.DEMO_MODE else "strict_jwt",
-        }
+    frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    if frontend_dist.is_dir():
+        assets_dir = frontend_dist / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+        @app.get("/api/info", tags=["Gateway"])
+        async def api_info():
+            return {
+                "name": settings.APP_NAME,
+                "status": "online",
+                "docs_url": "/docs",
+                "health_url": "/api/health",
+                "auth_status": "demo_mode" if settings.DEMO_MODE else "strict_jwt",
+            }
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def serve_spa(request: Request, full_path: str):
+            if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("openapi.json") or full_path.startswith("ws/"):
+                from fastapi import HTTPException
+                raise HTTPException(status_code=404, detail="Endpoint not found")
+
+            # If JSON explicitly requested on root, return API status dictionary
+            if not full_path and "application/json" in request.headers.get("accept", ""):
+                return {
+                    "name": settings.APP_NAME,
+                    "status": "online",
+                    "docs_url": "/docs",
+                    "health_url": "/api/health",
+                    "auth_status": "demo_mode" if settings.DEMO_MODE else "strict_jwt",
+                }
+            # Serve specific file if present in frontend/dist
+            target_file = frontend_dist / full_path
+            if full_path and target_file.is_file():
+                return FileResponse(target_file)
+            # SPA fallback to index.html
+            index_path = frontend_dist / "index.html"
+            if index_path.is_file():
+                return FileResponse(index_path)
+            return {
+                "name": settings.APP_NAME,
+                "status": "online",
+                "docs_url": "/docs",
+                "health_url": "/api/health",
+            }
+    else:
+        @app.get("/")
+        async def root():
+            return {
+                "name": settings.APP_NAME,
+                "status": "online",
+                "docs_url": "/docs",
+                "health_url": "/api/health",
+                "auth_status": "demo_mode" if settings.DEMO_MODE else "strict_jwt",
+            }
 
     return app
 

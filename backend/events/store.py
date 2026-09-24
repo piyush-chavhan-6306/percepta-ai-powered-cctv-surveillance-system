@@ -1,83 +1,110 @@
 """
-Border Intelligence Event Store Module.
-Implements the Persist-Before-Publish contract, deterministic replay queries,
-exponential backoff retry for SQLite write contention, and SQLite persistence using SQLAlchemy async.
+PERCEPTA Event Store — Normalized Persistence Layer.
+
+Persists internal pipeline events into SQLite WAL table 'events'.
+Enforces the Persist-Before-Publish contract: events are guaranteed to be
+written and committed to the database before they are dispatched onto the EventBus.
 """
+from __future__ import annotations
+
 import asyncio
-from datetime import datetime
+import json
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
-from sqlalchemy import select
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy import column, func, literal_column, select, text
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.database import get_db_session, get_session_factory
+from backend.config import get_settings
+from backend.database import get_session_factory
+from backend.database.schema import Event
 from backend.events.bus import EventBus, get_event_bus
-from backend.events.schema import BaseEvent, EventType, SourceType, SystemEvent
-from backend.incidents.models import EventLogModel
+from backend.events.schema import BaseEvent
 
 logger = logging.getLogger(__name__)
 
 
-class EventStore:
-    """Durable Event Store with Persist-Before-Publish and deterministic replay."""
+class EventSequenceId(int):
+    """Integer sequence ID (compatible with int comparisons like > 0) that carries event_id string."""
+    def __new__(cls, val: int, event_id: str = ""):
+        obj = super().__new__(cls, int(val))
+        obj.event_id = str(event_id)
+        return obj
 
-    def __init__(self, bus: Optional[EventBus] = None, max_retries: int = 5) -> None:
+
+class EventStore:
+    """
+    Durable Event Store using the normalized 'events' table.
+    Enforces atomic batch commits and the Persist-Before-Publish contract.
+    """
+
+    def __init__(
+        self,
+        bus: Optional[EventBus] = None,
+        max_retries: int = 5,
+    ) -> None:
         self.bus = bus or get_event_bus()
         self.max_retries = max_retries
-        self._stats_cache: Optional[Tuple[float, Dict[str, Any]]] = None
-        self._stats_cache_ttl = 2.0
-
-    async def record_event(
-        self,
-        event: BaseEvent,
-        session: Optional[AsyncSession] = None,
-        publish: bool = True,
-    ) -> int:
-        """
-        Durable Persist-Before-Publish:
-        Persists single event to SQLite event_logs table and publishes to EventBus on commit.
-        """
-        seq_ids = await self.record_events_batch([event], session=session, publish=publish)
-        return seq_ids[0] if seq_ids else 0
+        self._stats_cache = None
+        self._stats_cache_ttl = 5.0
 
     async def record_events_batch(
         self,
         events: List[BaseEvent],
         session: Optional[AsyncSession] = None,
         publish: bool = True,
-    ) -> List[int]:
+    ) -> List[EventSequenceId]:
         """
         Atomically persist a batch of events in a single SQLite WAL transaction.
         Enforces Persist-Before-Publish: publishes all events only after commit succeeds.
+        Returns list of EventSequenceId (int sequence IDs with .event_id string attribute).
         """
         if not events:
             return []
 
-        log_entries = [
-            EventLogModel(
-                event_id=str(ev.event_id),
-                event_type=ev.event_type.value,
-                timestamp=ev.timestamp,
-                camera_id=ev.camera_id,
-                track_id=ev.track_id,
-                incident_id=ev.incident_id,
-                confidence=ev.confidence,
-                source=ev.source.value if hasattr(ev.source, "value") else str(ev.source),
-                payload=ev.model_dump_json(),
+        log_entries = []
+        for ev in events:
+            if hasattr(ev, "model_dump"):
+                m = ev.model_dump(mode="json")
+            elif hasattr(ev, "dict"):
+                m = ev.dict()
+            else:
+                m = {}
+            log_entries.append(
+                Event(
+                    event_id=str(ev.event_id),
+                    event_type=ev.event_type.value if hasattr(ev.event_type, "value") else str(ev.event_type),
+                    timestamp=ev.timestamp,
+                    camera_id=ev.camera_id,
+                    session_id=None,
+                    local_track_id=getattr(ev, "track_id", None),
+                    global_entity_id=getattr(ev, "global_person_id", None),
+                    zone_id=getattr(ev, "zone_id", None),
+                    incident_id=getattr(ev, "incident_id", None),
+                    entity_type=getattr(ev, "object_class", None),
+                    confidence=getattr(ev, "confidence", None),
+                    source=ev.source.value if hasattr(ev.source, "value") else str(ev.source),
+                    meta=m,
+                )
             )
-            for ev in events
-        ]
 
         if session is not None:
             session.add_all(log_entries)
             await session.flush()
-            seq_ids = [entry.seq_id for entry in log_entries]
+            ev_ids = [entry.event_id for entry in log_entries]
+            # Fetch rowids
+            rowid_res = await session.execute(
+                select(Event.event_id, column("rowid").label("seq_id")).where(Event.event_id.in_(ev_ids))
+            )
+            id_map = {r.event_id: r.seq_id for r in rowid_res}
+            seq_results = [EventSequenceId(id_map.get(eid, 0), eid) for eid in ev_ids]
             if publish:
                 for ev in events:
                     await self.bus.publish(ev)
-            return seq_ids
+            return seq_results
 
         factory = get_session_factory()
         last_error = None
@@ -87,12 +114,18 @@ class EventStore:
                 async with factory() as local_session:
                     local_session.add_all(log_entries)
                     await local_session.commit()
-                    seq_ids = [entry.seq_id for entry in log_entries]
+                    ev_ids = [entry.event_id for entry in log_entries]
+
+                    rowid_res = await local_session.execute(
+                        select(Event.event_id, column("rowid").label("seq_id")).where(Event.event_id.in_(ev_ids))
+                    )
+                    id_map = {r.event_id: r.seq_id for r in rowid_res}
+                    seq_results = [EventSequenceId(id_map.get(eid, 0), eid) for eid in ev_ids]
 
                     if publish:
                         for ev in events:
                             await self.bus.publish(ev)
-                    return seq_ids
+                    return seq_results
             except (OperationalError, DBAPIError) as err:
                 last_error = err
                 backoff_ms = (2 ** attempt) * 10 + (attempt * 5)
@@ -102,6 +135,16 @@ class EventStore:
 
         logger.error(f"EventStore failed to persist event batch after {self.max_retries} attempts: {last_error}")
         raise last_error or RuntimeError("Failed to persist event batch due to database write contention")
+
+    async def record_event(
+        self,
+        event: BaseEvent,
+        session: Optional[AsyncSession] = None,
+        publish: bool = True,
+    ) -> EventSequenceId:
+        """Persist single event, return EventSequenceId (int subclass)."""
+        res = await self.record_events_batch([event], session=session, publish=publish)
+        return res[0] if res else EventSequenceId(0, "")
 
     async def get_events(
         self,
@@ -114,53 +157,57 @@ class EventStore:
         session: Optional[AsyncSession] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Durable Event Replay API with deterministic ordering.
-
-        Default ordering is ``timestamp ASC, seq_id ASC``: replay clients page
-        forward with ``after_seq`` and need the oldest unseen rows first.
-
-        ``newest_first=True`` flips both keys to DESC for callers that want "the
-        last N events" instead. That distinction is not cosmetic -- the log grows
-        without bound, so an ascending ``limit`` silently returns the oldest rows
-        in the whole database. On a log with 169k rows, a caller asking for 500
-        recent events was reading events from the very first run.
+        Durable Event Replay API with deterministic ordering:
+        ORDER BY timestamp ASC, rowid ASC (or DESC if newest_first=True)
         """
-        query = select(EventLogModel)
+        query = select(Event, column("rowid").label("seq_id"))
 
-        if since is not None:
-            query = query.where(EventLogModel.timestamp >= since)
         if after_seq is not None:
-            query = query.where(EventLogModel.seq_id > after_seq)
+            query = query.where(column("rowid") > after_seq)
+        if since is not None:
+            query = query.where(Event.timestamp >= since)
         if camera_id is not None:
-            query = query.where(EventLogModel.camera_id == camera_id)
+            query = query.where(Event.camera_id == camera_id)
         if event_type is not None:
-            query = query.where(EventLogModel.event_type == event_type)
+            query = query.where(Event.event_type == event_type)
 
-        # Deterministic tie-breaking sequence
         if newest_first:
-            query = query.order_by(EventLogModel.timestamp.desc(), EventLogModel.seq_id.desc())
+            query = query.order_by(Event.timestamp.desc(), column("rowid").desc())
         else:
-            query = query.order_by(EventLogModel.timestamp.asc(), EventLogModel.seq_id.asc())
+            query = query.order_by(Event.timestamp.asc(), column("rowid").asc())
         query = query.limit(limit)
 
         async def _exec(s: AsyncSession) -> List[Dict[str, Any]]:
             result = await s.execute(query)
-            rows = result.scalars().all()
-            return [
-                {
-                    "seq_id": row.seq_id,
-                    "event_id": row.event_id,
-                    "event_type": row.event_type,
-                    "timestamp": row.timestamp.isoformat(),
-                    "camera_id": row.camera_id,
-                    "track_id": row.track_id,
-                    "incident_id": row.incident_id,
-                    "confidence": row.confidence,
-                    "source": row.source,
-                    "payload": row.payload,
-                }
-                for row in rows
-            ]
+            rows = result.all()
+            output = []
+            for r in rows:
+                ev = r.Event
+                meta_dict = ev.meta if isinstance(ev.meta, dict) else (
+                    json.loads(ev.meta) if isinstance(ev.meta, str) and ev.meta else {}
+                )
+                output.append({
+                    "seq_id": int(r.seq_id),
+                    "event_id": ev.event_id,
+                    "event_type": ev.event_type,
+                    "timestamp": ev.timestamp.isoformat(),
+                    "camera_id": ev.camera_id,
+                    "session_id": ev.session_id,
+                    "local_track_id": ev.local_track_id,
+                    "track_id": ev.local_track_id,
+                    "global_entity_id": ev.global_entity_id,
+                    "global_person_id": ev.global_entity_id,
+                    "zone_id": ev.zone_id,
+                    "incident_id": ev.incident_id,
+                    "entity_type": ev.entity_type,
+                    "confidence": ev.confidence,
+                    "source": ev.source,
+                    "payload": json.dumps(meta_dict),
+                    "parsed_payload": meta_dict,
+                    "metadata": meta_dict,
+                    "evidence_id": ev.evidence_id,
+                })
+            return output
 
         if session is not None:
             return await _exec(session)
@@ -176,29 +223,40 @@ class EventStore:
     ) -> List[Dict[str, Any]]:
         """Retrieve all events related to an incident ordered deterministically."""
         query = (
-            select(EventLogModel)
-            .where(EventLogModel.incident_id == incident_id)
-            .order_by(EventLogModel.timestamp.asc(), EventLogModel.seq_id.asc())
+            select(Event, column("rowid").label("seq_id"))
+            .where(Event.incident_id == incident_id)
+            .order_by(Event.timestamp.asc(), column("rowid").asc())
         )
 
         async def _exec(s: AsyncSession) -> List[Dict[str, Any]]:
             result = await s.execute(query)
-            rows = result.scalars().all()
-            return [
-                {
-                    "seq_id": row.seq_id,
-                    "event_id": row.event_id,
-                    "event_type": row.event_type,
-                    "timestamp": row.timestamp.isoformat(),
-                    "camera_id": row.camera_id,
-                    "track_id": row.track_id,
-                    "incident_id": row.incident_id,
-                    "confidence": row.confidence,
-                    "source": row.source,
-                    "payload": row.payload,
-                }
-                for row in rows
-            ]
+            rows = result.all()
+            output = []
+            for r in rows:
+                ev = r.Event
+                meta_dict = ev.meta if isinstance(ev.meta, dict) else (
+                    json.loads(ev.meta) if isinstance(ev.meta, str) and ev.meta else {}
+                )
+                output.append({
+                    "seq_id": int(r.seq_id),
+                    "event_id": ev.event_id,
+                    "event_type": ev.event_type,
+                    "timestamp": ev.timestamp.isoformat(),
+                    "camera_id": ev.camera_id,
+                    "session_id": ev.session_id,
+                    "local_track_id": ev.local_track_id,
+                    "track_id": ev.local_track_id,
+                    "global_entity_id": ev.global_entity_id,
+                    "global_person_id": ev.global_entity_id,
+                    "zone_id": ev.zone_id,
+                    "incident_id": ev.incident_id,
+                    "confidence": ev.confidence,
+                    "source": ev.source,
+                    "payload": json.dumps(meta_dict),
+                    "parsed_payload": meta_dict,
+                    "metadata": meta_dict,
+                })
+            return output
 
         if session is not None:
             return await _exec(session)
@@ -206,7 +264,6 @@ class EventStore:
         factory = get_session_factory()
         async with factory() as local_session:
             return await _exec(local_session)
-
 
     async def get_alerts(
         self,
@@ -216,39 +273,43 @@ class EventStore:
         session: Optional[AsyncSession] = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve stored alert events with filtering."""
-        query = select(EventLogModel).where(EventLogModel.event_type == "ALERT")
+        query = select(Event, column("rowid").label("seq_id")).where(Event.event_type == "ALERT")
         if camera_id is not None:
-            query = query.where(EventLogModel.camera_id == camera_id)
-        query = query.order_by(EventLogModel.timestamp.desc(), EventLogModel.seq_id.desc()).limit(limit)
+            query = query.where(Event.camera_id == camera_id)
+        query = query.order_by(Event.timestamp.desc(), column("rowid").desc()).limit(limit)
 
         async def _exec(s: AsyncSession) -> List[Dict[str, Any]]:
             result = await s.execute(query)
-            rows = result.scalars().all()
+            rows = result.all()
             alerts = []
-            for row in rows:
+            for r in rows:
+                ev = r.Event
+                meta_dict = ev.meta if isinstance(ev.meta, dict) else (
+                    json.loads(ev.meta) if isinstance(ev.meta, str) and ev.meta else {}
+                )
+                sev_val = meta_dict.get("severity") or meta_dict.get("zone_severity")
+                if severity:
+                    if str(sev_val or "").upper() != severity.upper():
+                        continue
                 item = {
-                    "seq_id": row.seq_id,
-                    "event_id": row.event_id,
-                    "timestamp": row.timestamp.isoformat(),
-                    "camera_id": row.camera_id,
-                    "track_id": row.track_id,
-                    "incident_id": row.incident_id,
-                    "confidence": row.confidence,
-                    "source": row.source,
-                    "payload": row.payload,
-                    "message": None,
-                    "severity": None,
-                    "is_acknowledged": False,
+                    "seq_id": int(r.seq_id),
+                    "event_id": ev.event_id,
+                    "timestamp": ev.timestamp.isoformat(),
+                    "camera_id": ev.camera_id,
+                    "local_track_id": ev.local_track_id,
+                    "track_id": ev.local_track_id,
+                    "global_entity_id": ev.global_entity_id,
+                    "global_person_id": ev.global_entity_id,
+                    "incident_id": ev.incident_id,
+                    "confidence": ev.confidence,
+                    "source": ev.source,
+                    "payload": json.dumps(meta_dict),
+                    "parsed_payload": meta_dict,
+                    "metadata": meta_dict,
+                    "message": meta_dict.get("message") or meta_dict.get("narrative"),
+                    "severity": sev_val,
+                    "is_acknowledged": bool(meta_dict.get("is_acknowledged", False)),
                 }
-                if row.payload:
-                    try:
-                        p_data = json.loads(row.payload)
-                        if isinstance(p_data, dict):
-                            item["message"] = p_data.get("message")
-                            item["severity"] = p_data.get("severity")
-                            item["is_acknowledged"] = p_data.get("is_acknowledged", False)
-                    except Exception:
-                        pass
                 alerts.append(item)
             return alerts
 
@@ -260,27 +321,16 @@ class EventStore:
             return await _exec(local_session)
 
     async def get_system_stats(self, session: Optional[AsyncSession] = None) -> Dict[str, Any]:
-        """
-        Compute high-level event counts and database metrics.
-
-        These three COUNT(*) scans grow with the event log (250k+ rows within an
-        hour of live tracking). The dashboard polls this every second, and on
-        SQLite each full scan contends with the perception worker's event writes
-        -- the visible symptom was the MJPEG stream stalling for up to ~2 s every
-        time the counts were recomputed. A short TTL cache collapses a burst of
-        polls into one scan without making the numbers meaningfully stale.
-        """
-        from sqlalchemy import func
-
+        """Compute high-level event counts and database metrics."""
         now = time.perf_counter()
         cached = self._stats_cache
         if cached is not None and (now - cached[0]) < self._stats_cache_ttl:
             return cached[1]
 
         async def _exec(s: AsyncSession) -> Dict[str, Any]:
-            total_events_query = select(func.count(EventLogModel.seq_id))
-            alerts_query = select(func.count(EventLogModel.seq_id)).where(EventLogModel.event_type == "ALERT")
-            cameras_query = select(func.count(func.distinct(EventLogModel.camera_id)))
+            total_events_query = select(func.count(Event.event_id))
+            alerts_query = select(func.count(Event.event_id)).where(Event.event_type == "ALERT")
+            cameras_query = select(func.count(func.distinct(Event.camera_id)))
 
             total_events = (await s.execute(total_events_query)).scalar() or 0
             total_alerts = (await s.execute(alerts_query)).scalar() or 0
@@ -303,22 +353,19 @@ class EventStore:
         return stats
 
     async def acknowledge_alert(self, event_id: str, session: Optional[AsyncSession] = None) -> bool:
-        """Mark an alert event or incident as acknowledged."""
-        from sqlalchemy import update
+        """Mark an alert event as acknowledged by updating its meta JSON."""
         clean_id = str(event_id).strip()
 
         async def _exec(s: AsyncSession) -> bool:
-            stmt = select(EventLogModel).where(EventLogModel.event_id == clean_id)
+            stmt = select(Event).where(Event.event_id == clean_id)
             res = await s.execute(stmt)
             row = res.scalar_one_or_none()
             if not row:
                 return False
-            # Update payload JSON to set is_acknowledged: True
-            import json
             try:
-                data = json.loads(row.payload)
-                data["is_acknowledged"] = True
-                row.payload = json.dumps(data)
+                meta_dict = dict(row.meta or {})
+                meta_dict["is_acknowledged"] = True
+                row.meta = meta_dict
                 await s.commit()
                 return True
             except Exception:
@@ -339,23 +386,21 @@ class EventStore:
         session: Optional[AsyncSession] = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve aggregated incidents list."""
-        from sqlalchemy import func
-        # Group by incident_id from EventLogModel
         query = (
             select(
-                EventLogModel.incident_id,
-                EventLogModel.camera_id,
-                func.count(EventLogModel.seq_id).label("total_events"),
-                func.min(EventLogModel.timestamp).label("first_seen"),
-                func.max(EventLogModel.timestamp).label("last_seen"),
+                Event.incident_id,
+                Event.camera_id,
+                func.count(column("rowid")).label("total_events"),
+                func.min(Event.timestamp).label("first_seen"),
+                func.max(Event.timestamp).label("last_seen"),
             )
-            .where(EventLogModel.incident_id.isnot(None))
+            .where(Event.incident_id.isnot(None))
         )
         if camera_id is not None:
-            query = query.where(EventLogModel.camera_id == camera_id)
+            query = query.where(Event.camera_id == camera_id)
         query = (
-            query.group_by(EventLogModel.incident_id, EventLogModel.camera_id)
-            .order_by(func.max(EventLogModel.timestamp).desc())
+            query.group_by(Event.incident_id, Event.camera_id)
+            .order_by(func.max(Event.timestamp).desc())
             .limit(limit)
         )
 

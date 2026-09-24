@@ -140,6 +140,7 @@ async def test_concurrency_and_stress_persistence():
         factory = get_session_factory()
         async with factory() as session:
             await session.execute(text("DELETE FROM event_logs WHERE camera_id = 'cam_stress_test';"))
+            await session.execute(text("DELETE FROM events WHERE camera_id = 'cam_stress_test';"))
             await session.commit()
 
 

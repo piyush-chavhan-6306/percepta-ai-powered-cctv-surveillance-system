@@ -516,12 +516,12 @@ async def main():
     logger.info(f"Running Phase 4 Multi-Dataset Evaluation Harness from {root}")
 
     # 1. MOT17 Ground Tracking Evaluation
-    mot17_dir = root / "moth17" / "MOT17" / "train" / "MOT17-02-FRCNN"
+    mot17_dir = root / "dataset/perimeter" / "MOT17" / "train" / "MOT17-02-FRCNN"
     mot17_res = await evaluate_mot17_sequence(mot17_dir, max_frames=120)
 
     # 2. VisDrone-MOT UAV Tracking Evaluation
-    visdrone_seq = root / "VisDrone2019-MOT-val" / "VisDrone2019-MOT-val" / "sequences" / "uav0000086_00000_v"
-    visdrone_ann = root / "VisDrone2019-MOT-val" / "VisDrone2019-MOT-val" / "annotations" / "uav0000086_00000_v.txt"
+    visdrone_seq = root / "dataset/drone/VisDrone2019-MOT-val" / "dataset/drone/VisDrone2019-MOT-val" / "sequences" / "uav0000086_00000_v"
+    visdrone_ann = root / "dataset/drone/VisDrone2019-MOT-val" / "dataset/drone/VisDrone2019-MOT-val" / "annotations" / "uav0000086_00000_v.txt"
     visdrone_res = await evaluate_visdrone_sequence(visdrone_seq, visdrone_ann, max_frames=120)
 
     # 3. VIRAT CCTV E2E Surveillance Pipeline

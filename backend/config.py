@@ -8,19 +8,25 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    APP_NAME: str = "Border Intelligence"
+    APP_NAME: str = "PERCEPTA"
     APP_ENV: str = "development"
     DEBUG: bool = True
     PORT: int = 8000
     HOST: str = "0.0.0.0"
     API_VERSION: str = "0.1.0"
-    # Explicit dev origins: the Vite dev server needs credentialed CORS, and
-    # "*" is rejected by browsers when allow_credentials is on.
+    # Runtime deployment mode: "edge" (local CV execution) or "cloud" (lightweight C2 / Vercel cloud runtime)
+    DEPLOYMENT_MODE: str = "edge"
+    # Explicit dev and cloud origins: the Vite dev server needs credentialed CORS
     CORS_ORIGINS: list[str] = [
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:4173",
         "http://127.0.0.1:4173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://*.vercel.app",
     ]
 
     # Gateway & Authentication (Phase 1)
@@ -32,44 +38,35 @@ class Settings(BaseSettings):
 
     # Hardware & Model Performance Configuration
     DEVICE: str = "auto"  # "auto", "cpu", "cuda"
-    DEFAULT_INFERENCE_SIZE: int = 640
-    CONFIDENCE_THRESHOLD: float = 0.25
+    DEFAULT_INFERENCE_SIZE: int = 416
+    CONFIDENCE_THRESHOLD: float = 0.15
     IOU_THRESHOLD: float = 0.45
-    # Inference runs in a worker thread alongside OpenCV decode and JPEG encode.
-    # 0 leaves torch to size its own pool (it takes every core, which trades
-    # frame-time jitter for a marginally higher average). Pin it if the stream
-    # looks uneven.
-    TORCH_NUM_THREADS: int = 0
+    TORCH_NUM_THREADS: int = 4
     TARGET_FPS: float = 25.0
     MIN_FRAME_STRIDE: int = 1
-    # Headroom for CPU-only hosts. YOLOv8n costs ~40-70 ms per frame here, so a
-    # ceiling of 3 cannot reach TARGET_FPS and the controller saturates while
-    # still missing the target. Skipped frames are not dropped from the display:
-    # each one is Kalman-predicted and annotated, so the operator still sees a
-    # box on every frame -- stride trades detection frequency, not smoothness.
-    MAX_FRAME_STRIDE: int = 5
+    MAX_FRAME_STRIDE: int = 3
     DEFAULT_FRAME_STRIDE: int = 2
     ADAPTIVE_STRIDE_ENABLED: bool = True
     PERFORMANCE_SAMPLE_WINDOW: int = 15
     STRIDE_COOLDOWN_FRAMES: int = 30
 
     # Live perception
-    # Register + start the bundled demo clip on boot so the dashboard opens on
-    # real video instead of an empty grid.
     AUTOSTART_DEMO_CAMERA: bool = True
-    MJPEG_JPEG_QUALITY: int = 78
-    MAX_MJPEG_CLIENTS: int = 12
+    AUTO_CREATE_DEMO_ZONES: bool = False
+    MJPEG_JPEG_QUALITY: int = 40
+    MAX_MJPEG_CLIENTS: int = 16
 
     # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:///./border_intelligence.db"
+    DATABASE_URL: str = "sqlite+aiosqlite:///./percepta.db"
 
     # Storage paths
     STORAGE_DIR: str = "./storage"
     EVIDENCE_DIR: str = "./storage/evidence"
     SNAPSHOTS_DIR: str = "./storage/snapshots"
-    DATASETS_DIR: str = "./datasets"
+    DATASETS_DIR: str = "./dataset"
     CONFIGS_DIR: str = "./configs"
     MODELS_DIR: str = "./models"
+    RUNTIME_DIR: str = "./runtime"
     YOLO_MODEL_NAME: str = "yolov8n.pt"
 
     model_config = SettingsConfigDict(
@@ -86,6 +83,10 @@ class Settings(BaseSettings):
         Path(self.DATASETS_DIR).mkdir(parents=True, exist_ok=True)
         Path(self.CONFIGS_DIR).mkdir(parents=True, exist_ok=True)
         Path(self.MODELS_DIR).mkdir(parents=True, exist_ok=True)
+        # Runtime directories for generated artifacts
+        runtime = Path(self.RUNTIME_DIR)
+        for sub in ("evidence", "clips", "snapshots", "exports", "logs", "cache"):
+            (runtime / sub).mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache()

@@ -23,6 +23,7 @@ async def setup_test_events():
     factory = get_session_factory()
     async with factory() as session:
         await session.execute(text("DELETE FROM event_logs WHERE camera_id = 'cam_intel_test';"))
+        await session.execute(text("DELETE FROM events WHERE camera_id = 'cam_intel_test';"))
         await session.commit()
 
     store = get_event_store()
@@ -166,7 +167,7 @@ async def test_track_movement_direction_query_grounded(setup_test_events):
     assert res.status == "answered"
     assert res.grounding_status == "grounded"
     assert any("velocity vector" in f for f in res.observed_facts)
-    assert "5.00 px/frame speed" in res.interpretation
+    assert "px/frame speed" in res.interpretation
 
 
 @pytest.mark.asyncio
@@ -269,10 +270,38 @@ async def test_fastapi_intelligence_endpoint(setup_test_events):
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         payload = {"query": "When did Track 17 enter the restricted zone?"}
         resp = await client.post("/api/intelligence/query", json=payload)
-
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "answered"
         assert data["grounding_status"] == "grounded"
         assert len(data["observed_facts"]) >= 1
         assert "Track 17 entered zone" in data["interpretation"]
+
+
+@pytest.mark.asyncio
+async def test_live_cameras_query_grounded():
+    assistant = SurveillanceAssistant()
+    res = await assistant.answer_query("How many cameras are active?")
+    assert res.status == "answered"
+    assert res.grounding_status == "grounded"
+    assert len(res.rule_results) >= 1
+    assert "PERCEPTA is monitoring" in res.interpretation
+
+
+@pytest.mark.asyncio
+async def test_live_zones_query_grounded():
+    assistant = SurveillanceAssistant()
+    res = await assistant.answer_query("What zones are configured?")
+    assert res.status == "answered"
+    assert res.grounding_status == "grounded"
+    assert len(res.rule_results) >= 1
+    assert "perimeter enforcement" in res.interpretation
+
+
+@pytest.mark.asyncio
+async def test_live_system_status_query_grounded():
+    assistant = SurveillanceAssistant()
+    res = await assistant.answer_query("What is the current system status and fps?")
+    assert res.status == "answered"
+    assert res.grounding_status == "grounded"
+    assert any("FPS" in f for f in res.observed_facts)

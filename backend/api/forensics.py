@@ -7,11 +7,29 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from backend.events.forensics import (
     EventVerificationResult,
+    EvidenceVerificationResult,
     IntegrityAuditReport,
     get_forensics_engine,
 )
 
 router = APIRouter(prefix="/api/evidence", tags=["Forensic Evidence"])
+
+
+@router.get("/verify-record/{identifier}", response_model=EvidenceVerificationResult)
+async def verify_evidence_file_integrity(identifier: str) -> EvidenceVerificationResult:
+    """
+    Cryptographically verify physical evidence files against their stored SHA-256 signatures.
+    Re-reads physical bytes from disk and recalculates SHA-256.
+    Returns: VERIFIED, COMPROMISED, MISSING, or INVALID status.
+    """
+    engine = get_forensics_engine()
+    result = await engine.verify_evidence(identifier)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evidence or Incident record '{identifier}' not found",
+        )
+    return result
 
 
 @router.get("/verify/{event_id}", response_model=EventVerificationResult)
@@ -48,6 +66,53 @@ async def get_incident_snapshots(incident_id: str):
     return {"incident_id": incident_id, "count": len(snaps), "snapshots": snaps}
 
 
+@router.get("/records/{incident_id}")
+async def get_incident_evidence_records(incident_id: str):
+    """
+    Retrieve SHA-256 verified Evidence DB records for an incident.
+    These are target-specific, cryptographically hashed evidence items
+    created by the EvidenceBridge when alerts fire.
+    """
+    from sqlalchemy import select
+    from backend.database import get_session_factory
+    from backend.database.schema import Evidence
+
+    factory = get_session_factory()
+    async with factory() as session:
+        stmt = (
+            select(Evidence)
+            .where(Evidence.incident_id == incident_id)
+            .order_by(Evidence.timestamp.asc())
+        )
+        res = await session.execute(stmt)
+        items = res.scalars().all()
+
+        records = []
+        for ev in items:
+            records.append({
+                "evidence_id": ev.evidence_id,
+                "incident_id": ev.incident_id,
+                "evidence_type": ev.evidence_type,
+                "camera_id": ev.camera_id,
+                "timestamp": ev.timestamp.isoformat() if ev.timestamp else None,
+                "confidence": ev.confidence,
+                "quality": ev.quality,
+                "sha256_hash": ev.sha256_hash,
+                "reason": ev.reason,
+                "target_crop_path": ev.target_crop_path,
+                "full_scene_path": ev.full_scene_path,
+                "source_frame_number": ev.source_frame_number,
+                "global_entity_id": ev.global_entity_id,
+                "local_track_id": ev.local_track_id,
+            })
+
+        return {
+            "incident_id": incident_id,
+            "count": len(records),
+            "evidence": records,
+        }
+
+
 @router.get("/snapshots/file/{filename}")
 async def get_snapshot_image_file(filename: str):
     """Serve visual JPEG snapshot image file."""
@@ -62,3 +127,96 @@ async def get_snapshot_image_file(filename: str):
             detail=f"Snapshot file '{filename}' not found",
         )
     return FileResponse(str(file_path), media_type="image/jpeg")
+
+
+@router.get("/timeline/{camera_id}")
+async def get_camera_event_timeline(
+    camera_id: str,
+    limit: int = Query(50, ge=1, le=200),
+):
+    """
+    Retrieve chronological events with deterministic timestamp offsets,
+    frame indices, and snapshot URIs for video timeline seeking.
+    """
+    import json
+    from backend.events.store import get_event_store
+    store = get_event_store()
+    alerts = await store.get_alerts(camera_id=camera_id, limit=limit)
+    timeline_items = []
+
+    for idx, a in enumerate(alerts):
+        t_str = a.get("timestamp", "")
+        payload_data = {}
+        if a.get("payload"):
+            try:
+                payload_data = json.loads(a["payload"])
+            except Exception:
+                pass
+
+        timeline_items.append({
+            "seq_id": a["seq_id"],
+            "event_id": a["event_id"],
+            "camera_id": camera_id,
+            "timestamp": t_str,
+            "track_id": a.get("track_id"),
+            "severity": a.get("severity", "CRITICAL"),
+            "message": a.get("message", "Perimeter Alert"),
+            "threat_score": payload_data.get("threat_score", 75),
+            "threat_level": payload_data.get("threat_level", "HIGH"),
+            "evidence_snapshot_uri": payload_data.get("evidence_snapshot_uri"),
+            "face_snapshot_uri": payload_data.get("face_snapshot_uri"),
+            "anpr_snapshot_uri": payload_data.get("anpr_snapshot_uri"),
+            "best_frame_number": payload_data.get("best_frame_number", idx * 30 + 15),
+            "timeline_offset_sec": payload_data.get("timeline_offset_sec", float(idx * 5)),
+            "pre_roll_sec": 5.0,
+            "post_roll_sec": 5.0,
+        })
+
+    return {
+        "camera_id": camera_id,
+        "count": len(timeline_items),
+        "timeline": timeline_items,
+    }
+
+
+@router.get("/seek/{event_id}")
+async def seek_event_playback(
+    event_id: str,
+    pre_sec: float = Query(5.0, ge=1.0, le=30.0),
+    post_sec: float = Query(5.0, ge=1.0, le=30.0),
+):
+    """
+    Retrieve exact video seeking parameters and replay metadata for a specific incident.
+    """
+    import json
+    from backend.events.store import get_event_store
+    store = get_event_store()
+    raw = await store.get_event_by_id(event_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
+
+    payload_data = {}
+    if raw.get("payload"):
+        try:
+            payload_data = json.loads(raw["payload"])
+        except Exception:
+            pass
+
+    return {
+        "event_id": event_id,
+        "camera_id": raw["camera_id"],
+        "timestamp": raw["timestamp"],
+        "track_id": raw.get("track_id"),
+        "severity": raw.get("severity", "CRITICAL"),
+        "message": raw.get("message"),
+        "threat_score": payload_data.get("threat_score"),
+        "threat_reasons": payload_data.get("threat_reasons", []),
+        "causal_chain": payload_data.get("causal_chain", []),
+        "evidence_snapshot_uri": payload_data.get("evidence_snapshot_uri"),
+        "face_snapshot_uri": payload_data.get("face_snapshot_uri"),
+        "anpr_snapshot_uri": payload_data.get("anpr_snapshot_uri"),
+        "best_frame_number": payload_data.get("best_frame_number"),
+        "pre_roll_sec": pre_sec,
+        "post_roll_sec": post_sec,
+        "playback_url": f"/api/streaming/feed/{raw['camera_id']}",
+    }

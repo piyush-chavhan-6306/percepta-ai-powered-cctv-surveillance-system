@@ -107,3 +107,58 @@ async def list_incident_notes(incident_id: str):
     manager = get_annotation_manager()
     notes = await manager.get_annotations(incident_id)
     return {"incident_id": incident_id, "count": len(notes), "annotations": notes}
+
+
+@router.post("/{incident_id}/acknowledge")
+async def acknowledge_incident(incident_id: str, request: Optional[dict] = None) -> Dict[str, Any]:
+    """Acknowledge an incident and its associated operator alert."""
+    from backend.incidents.service import get_incident_manager
+    mgr = get_incident_manager()
+    caller = (request or {}).get("operator", "Operator")
+    inc = await mgr.acknowledge_incident(incident_id=incident_id, acknowledged_by=caller)
+    if not inc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Incident '{incident_id}' not found",
+        )
+    return {"status": "success", "incident_id": incident_id, "incident_status": inc.status}
+
+
+@router.post("/{incident_id}/resolve")
+async def resolve_incident(incident_id: str, request: Optional[dict] = None) -> Dict[str, Any]:
+    """Resolve an incident and clear active alert state."""
+    from backend.incidents.service import get_incident_manager
+    mgr = get_incident_manager()
+    req = request or {}
+    resolver = req.get("operator", "Operator")
+    notes = req.get("notes", "Situation normalized")
+    inc = await mgr.resolve_incident(incident_id=incident_id, resolved_by=resolver, resolution_notes=notes)
+    if not inc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Incident '{incident_id}' not found",
+        )
+    return {"status": "success", "incident_id": incident_id, "incident_status": inc.status}
+
+
+@router.get("/{incident_id}/comprehensive-timeline")
+async def get_comprehensive_timeline(incident_id: str) -> Dict[str, Any]:
+    """Phase 16: Complete timeline covering What, Who, Where, When, How Serious, Why, Evidence, Status, Where Now."""
+    from backend.incidents.service import get_incident_manager
+    mgr = get_incident_manager()
+    timeline_data = await mgr.get_incident_timeline(incident_id)
+    if not timeline_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Incident '{incident_id}' not found",
+        )
+    return timeline_data
+
+
+@router.get("/metrics/deduplication")
+async def get_deduplication_metrics() -> Dict[str, Any]:
+    """Get telemetry metrics proving alert deduplication rate."""
+    from backend.incidents.service import get_incident_manager
+    mgr = get_incident_manager()
+    return mgr.get_deduplication_metrics()
+

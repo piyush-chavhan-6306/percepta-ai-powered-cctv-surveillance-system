@@ -17,9 +17,9 @@ async def inspect_database_diagnostics() -> Dict[str, Any]:
     settings = get_settings()
     factory = get_session_factory()
 
-    db_path = "./border_intelligence.db"
-    wal_path = "./border_intelligence.db-wal"
-    shm_path = "./border_intelligence.db-shm"
+    db_path = "./percepta.db"
+    wal_path = "./percepta.db-wal"
+    shm_path = "./percepta.db-shm"
 
     db_size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
     wal_size = os.path.getsize(wal_path) if os.path.exists(wal_path) else 0

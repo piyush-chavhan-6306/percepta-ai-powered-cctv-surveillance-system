@@ -4,7 +4,7 @@
  */
 
 export type CameraStatus = "online" | "offline" | "reconnecting" | "degraded" | "error";
-export type AlertSeverity = "info" | "warning" | "restricted" | "critical";
+export type AlertSeverity = "info" | "warning" | "restricted" | "critical" | "INFO" | "WARNING" | "RESTRICTED" | "CRITICAL" | string;
 export type EventType = "detection" | "tracking" | "zone" | "alert" | "incident" | "system";
 export type ProvenanceType = "detection" | "prediction";
 export type ThreatLevel = "DEFCON_GREEN" | "DEFCON_YELLOW" | "DEFCON_ORANGE" | "DEFCON_RED";
@@ -22,6 +22,11 @@ export interface CameraRecord {
   dropped_frames: number;
   last_seen: string | null;
   is_running: boolean;
+  modality?: string;
+  last_error?: string | null;
+  codec?: string | null;
+  duration_sec?: number | null;
+  source_path?: string | null;
   local_video_url?: string;
   custom_zones?: SecurityZone[];
   source_info?: {
@@ -59,6 +64,7 @@ export interface HeatmapResponse {
 export interface AlertItem {
   seq_id?: number;
   event_id: string;
+  alert_id?: string;
   timestamp: string;
   camera_id: string;
   track_id?: string;
@@ -66,9 +72,30 @@ export interface AlertItem {
   severity: AlertSeverity;
   message: string;
   confidence?: number;
+  threat_score?: number;
+  threat_level?: string;
+  threat_reasons?: string[];
+  causal_chain?: any;
+  evidence_snapshot_uri?: string;
+  evidenceSnapshotUri?: string;
+  face_snapshot_uri?: string;
+  anpr_snapshot_uri?: string;
+  reason?: string;
+  heading?: string;
+  speed_description?: string;
+  object_class?: string;
+  targetType?: string;
+  plate_number?: string;
+  plateNumber?: string;
   source?: string;
   is_acknowledged?: boolean;
 }
+
+export interface SimulatedAlert extends Partial<AlertItem> {
+  id?: string;
+  [key: string]: any;
+}
+
 
 export interface AlertsResponse {
   count: number;
@@ -151,6 +178,7 @@ export interface VirtualBoundary {
   pt1: [number, number];
   pt2: [number, number];
   severity: string;
+  direction?: string;
   is_active: boolean;
 }
 
@@ -191,6 +219,21 @@ export interface ForensicVerificationResult {
   tamper_status: "VERIFIED_AUTHENTIC" | "CORRUPTED_OR_TAMPERED";
   is_authentic: boolean;
   verification_timestamp: string;
+}
+
+export interface EvidenceVerificationResult {
+  evidence_id: string;
+  incident_id?: string;
+  camera_id?: string;
+  evidence_type: string;
+  stored_hash?: string;
+  computed_hash?: string;
+  file_path?: string;
+  file_exists: boolean;
+  file_bytes_checked: number;
+  verification_status: "VERIFIED" | "COMPROMISED" | "MISSING" | "INVALID" | "VERIFICATION_ERROR";
+  audit_verdict: string;
+  verified_at: string;
 }
 
 export interface IntegrityAuditReport {

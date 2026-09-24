@@ -32,7 +32,7 @@ async def run_freeze_benchmark(config_name: str, stride: int, adaptive: bool, nu
     await init_db()
     store = get_event_store()
 
-    video_path = Path("VIRAT/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4")
+    video_path = Path("dataset/surveillance/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4")
     cap = cv2.VideoCapture(str(video_path))
     assert cap.isOpened(), "Failed to open VIRAT video"
 

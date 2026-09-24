@@ -41,7 +41,7 @@ async def run_e2e_demo(max_frames: int = 150):
         # Fallback to any available MP4 in VIRAT
         mp4s = list((root / "VIRAT" / "CCTV 01").glob("*.mp4"))
         if not mp4s:
-            raise FileNotFoundError("No CCTV videos found in VIRAT/CCTV 01/")
+            raise FileNotFoundError("No CCTV videos found in dataset/surveillance/CCTV 01/")
         video_path = mp4s[0]
 
     logger.info(f"=== Running Phase 4 CCTV End-to-End Pipeline on {video_path.name} ===")

@@ -26,11 +26,13 @@ class CreateZoneRequest(BaseModel):
 
 
 class CreateBoundaryRequest(BaseModel):
-    boundary_id: str
+    boundary_id: Optional[str] = None
     name: str
     pt1: Tuple[float, float]
     pt2: Tuple[float, float]
     severity: str = "critical"
+    direction: str = "BIDIRECTIONAL"  # "NORTH", "SOUTH", "EAST", "WEST", "BIDIRECTIONAL"
+    debounce_seconds: float = 3.0
 
 
 class ZoneResponse(BaseModel):
@@ -48,6 +50,7 @@ class BoundaryResponse(BaseModel):
     pt1: Tuple[float, float]
     pt2: Tuple[float, float]
     severity: str
+    direction: str = "BIDIRECTIONAL"
     is_active: bool
 
 
@@ -69,7 +72,7 @@ async def list_zones_and_boundaries() -> ZoneListResponse:
             is_active=z.is_active,
             loitering_threshold_seconds=z.loitering_threshold_seconds,
         )
-        for z in monitor.zones.values()
+        for z in monitor.zones.values() if z.is_active
     ]
     boundaries_list = [
         BoundaryResponse(
@@ -78,9 +81,10 @@ async def list_zones_and_boundaries() -> ZoneListResponse:
             pt1=b.pt1,
             pt2=b.pt2,
             severity=b.severity.value,
+            direction=getattr(b, "direction", "BIDIRECTIONAL"),
             is_active=b.is_active,
         )
-        for b in monitor.boundaries.values()
+        for b in monitor.boundaries.values() if b.is_active
     ]
     return ZoneListResponse(zones=zones_list, boundaries=boundaries_list)
 
@@ -89,10 +93,7 @@ async def list_zones_and_boundaries() -> ZoneListResponse:
 async def create_security_zone(request: CreateZoneRequest) -> ZoneResponse:
     """Create a new polygon security zone."""
     monitor = get_zone_monitor()
-    try:
-        sev = ZoneSeverity(request.severity.lower())
-    except ValueError:
-        sev = ZoneSeverity.RESTRICTED
+    sev = ZoneSeverity.from_str(request.severity)
 
     zone = SecurityZone(
         zone_id=request.zone_id,
@@ -103,6 +104,12 @@ async def create_security_zone(request: CreateZoneRequest) -> ZoneResponse:
         loitering_debounce_seconds=request.loitering_debounce_seconds,
     )
     monitor.add_zone(zone)
+    try:
+        from backend.tracking.live_worker import get_worker_registry
+        get_worker_registry().reset_all_zone_states()
+    except Exception:
+        pass
+
     return ZoneResponse(
         zone_id=zone.zone_id,
         name=zone.name,
@@ -114,28 +121,37 @@ async def create_security_zone(request: CreateZoneRequest) -> ZoneResponse:
 
 
 @router.post("/boundary", response_model=BoundaryResponse)
+@router.post("/boundaries", response_model=BoundaryResponse)
 async def create_virtual_boundary(request: CreateBoundaryRequest) -> BoundaryResponse:
     """Create a new virtual tripwire boundary line."""
+    import uuid
     monitor = get_zone_monitor()
-    try:
-        sev = ZoneSeverity(request.severity.lower())
-    except ValueError:
-        sev = ZoneSeverity.CRITICAL
+    sev = ZoneSeverity.from_str(request.severity)
 
+    boundary_id = request.boundary_id or f"boundary-{uuid.uuid4().hex[:8]}"
     boundary = VirtualBoundary(
-        boundary_id=request.boundary_id,
+        boundary_id=boundary_id,
         name=request.name,
         pt1=request.pt1,
         pt2=request.pt2,
         severity=sev,
+        direction=request.direction,
+        debounce_seconds=request.debounce_seconds,
     )
     monitor.add_boundary(boundary)
+    try:
+        from backend.tracking.live_worker import get_worker_registry
+        get_worker_registry().reset_all_zone_states()
+    except Exception:
+        pass
+
     return BoundaryResponse(
         boundary_id=boundary.boundary_id,
         name=boundary.name,
         pt1=boundary.pt1,
         pt2=boundary.pt2,
         severity=boundary.severity.value,
+        direction=boundary.direction,
         is_active=boundary.is_active,
     )
 
@@ -144,11 +160,9 @@ async def create_virtual_boundary(request: CreateBoundaryRequest) -> BoundaryRes
 async def delete_zone_or_boundary(zone_id: str) -> Dict[str, Any]:
     """Delete a security zone or virtual boundary."""
     monitor = get_zone_monitor()
-    if zone_id in monitor.zones:
-        del monitor.zones[zone_id]
+    if monitor.remove_zone(zone_id):
         return {"zone_id": zone_id, "status": "deleted", "type": "zone"}
-    if zone_id in monitor.boundaries:
-        del monitor.boundaries[zone_id]
+    if monitor.remove_boundary(zone_id):
         return {"zone_id": zone_id, "status": "deleted", "type": "boundary"}
 
     raise HTTPException(
@@ -182,3 +196,16 @@ async def apply_zone_template(request: dict):
         return res
     except ValueError as err:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(err))
+
+
+@router.get("/occupancy")
+async def get_zone_occupancy() -> Dict[str, Any]:
+    """Get current zone occupancy — which tracks are in which zones with dwell times."""
+    monitor = get_zone_monitor()
+    occupancy = monitor.get_zone_occupancy()
+    total_occupied = sum(len(tracks) for tracks in occupancy.values())
+    return {
+        "zones": occupancy,
+        "total_occupied_tracks": total_occupied,
+        "zone_count": len(occupancy),
+    }

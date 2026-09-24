@@ -16,6 +16,7 @@ numpy>=1.26.0
 
 # AI Detection (Phase 3)
 ultralytics>=8.1.0
+onnxruntime>=1.17.0
 
 # Gateway, Auth & Rate Limiting (Phase 1)
 python-jose[cryptography]>=3.3.0

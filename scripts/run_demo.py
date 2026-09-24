@@ -47,7 +47,7 @@ async def run_live_demo(total_frames: int = 60) -> None:
 
     # 2. Camera Configuration & Adapter
     print("\n[STAGE 2] Registering CCTV Ingestion Adapter (VIRAT Real Footage)...")
-    video_path = "VIRAT/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4"
+    video_path = "dataset/surveillance/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4"
     if not Path(video_path).exists():
         print(f"  ✗ Demo video not found at: {video_path}")
         return

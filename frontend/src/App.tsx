@@ -1,76 +1,94 @@
-import React from "react";
+import React, { useState } from "react";
+import { Routes, Route, Navigate, useSearchParams } from "react-router";
 import { SurveillanceProvider, useSurveillance } from "./store/surveillanceContext";
 import { Header } from "./components/Header";
 import { Navigation } from "./components/Navigation";
+import { AddCameraModal } from "./components/AddCameraModal";
 import { DashboardView } from "./views/DashboardView";
 import { IncidentsView } from "./views/IncidentsView";
 import { ZonesView } from "./views/ZonesView";
 import { ForensicsView } from "./views/ForensicsView";
 import { IntelligenceView } from "./views/IntelligenceView";
-import { ShieldCheck, Database, Zap, Activity } from "lucide-react";
+import { TacticalAnalyticsView } from "./views/TacticalAnalyticsView";
+import Landing from "./pages/Landing";
+import Auth from "./pages/Auth";
 
-const MainLayout: React.FC = () => {
-  const { activeView } = useSurveillance();
+/* ─── Command Center Layout (Exact Reference Composition) ─────────────────── */
+const CommandCenterLayout: React.FC = () => {
+  const { activeView, registerCameraLocally } = useSurveillance();
+  const [searchParams] = useSearchParams();
+  const [isAddCameraOpen, setIsAddCameraOpen] = useState<boolean>(
+    searchParams.get("modal") === "add_camera" || searchParams.get("add") === "1"
+  );
 
   const renderActiveView = () => {
     switch (activeView) {
       case "dashboard":
-        return <DashboardView />;
+      case "cameras":
+      case "telemetry":
+        return <DashboardView onRegisterFeed={() => setIsAddCameraOpen(true)} />;
+      case "analytics":
+        return <TacticalAnalyticsView />;
       case "incidents":
         return <IncidentsView />;
-      case "zones":
-        return <ZonesView />;
+      case "entities":
       case "forensics":
         return <ForensicsView />;
+      case "zones":
+        return <ZonesView />;
       case "intelligence":
         return <IntelligenceView />;
       default:
-        return <DashboardView />;
+        return <DashboardView onRegisterFeed={() => setIsAddCameraOpen(true)} />;
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#05070a] text-gray-200 flex flex-col justify-between tactical-grid-bg font-sans">
-      <div>
-        <Header />
-        <Navigation />
-        <main className="p-4 max-w-[1920px] mx-auto w-full">{renderActiveView()}</main>
+    <div className="h-screen w-screen max-h-screen tactical-space-bg text-[#cbd5e1] flex flex-col font-sans select-none antialiased text-xs bg-tactical-void overflow-hidden">
+      {/* ── Top Command Header ── */}
+      <Header onRegisterFeed={() => setIsAddCameraOpen(true)} />
+
+      {/* ── Tactical Navigation Bar (C2 vs Intelligence & Analytics) ── */}
+      <Navigation />
+
+      {/* ── Main Operational Workspace ── */}
+      <div className="flex-1 overflow-hidden w-full flex flex-col min-h-0">
+        {renderActiveView()}
       </div>
 
-      {/* Clean Operations Footer */}
-      <footer className="bg-[#070a10] border-t border-white/10 px-5 py-2.5 flex items-center justify-between text-[11px] font-mono-tech text-gray-400 flex-wrap gap-3">
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-[#00e676]" />
-          <span className="text-gray-300 font-bold">BORDER INTELLIGENCE COMMAND POST (C2)</span>
-          <span className="text-gray-500">•</span>
-          <span>PS SIH26187</span>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <span className="flex items-center gap-1">
-            <Database className="w-3.5 h-3.5 text-[#00e5ff]" />
-            <span>PERSISTENCE: <strong className="text-gray-200">SQLITE WAL</strong></span>
-          </span>
-          <span className="flex items-center gap-1">
-            <Zap className="w-3.5 h-3.5 text-[#00e676]" />
-            <span>AI ENGINE: <strong className="text-gray-200">YOLOV8N + BYTETRACK KALMAN</strong></span>
-          </span>
-          <span className="flex items-center gap-1">
-            <Activity className="w-3.5 h-3.5 text-[#ffab00]" />
-            <span>BACKEND: <strong className="text-[#00e676]">140/140 VERIFIED</strong></span>
-          </span>
-        </div>
-      </footer>
+      {/* ── Register Feed Modal ── */}
+      <AddCameraModal
+        isOpen={isAddCameraOpen}
+        onClose={() => setIsAddCameraOpen(false)}
+        onCameraAdded={(cam, previewUrl) => {
+          registerCameraLocally(cam, previewUrl);
+          setIsAddCameraOpen(false);
+        }}
+      />
     </div>
   );
 };
 
-export const App: React.FC = () => {
+/* ─── App Root ────────────────────────────────────────────────────────────── */
+export default function App() {
   return (
-    <SurveillanceProvider>
-      <MainLayout />
-    </SurveillanceProvider>
-  );
-};
+    <Routes>
+      {/* Public Landing & Authentication */}
+      <Route path="/" element={<Landing />} />
+      <Route path="/auth" element={<Auth />} />
 
-export default App;
+      {/* Operational Command Center */}
+      <Route
+        path="/dashboard/*"
+        element={
+          <SurveillanceProvider>
+            <CommandCenterLayout />
+          </SurveillanceProvider>
+        }
+      />
+
+      {/* Fallback Redirect */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}

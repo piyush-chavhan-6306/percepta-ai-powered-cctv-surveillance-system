@@ -46,8 +46,8 @@ class EventBus:
 
     async def publish(self, event: BaseEvent) -> None:
         """
-        Publish an event to all matching subscribers concurrently.
-        Isolated: an exception in one subscriber does not prevent others from running.
+        Publish an event to all matching subscribers concurrently in the background.
+        Isolated: slow subscribers or exceptions never block or crash the publisher.
         """
         callbacks: List[SubscriberCallback] = []
         async with self._lock:

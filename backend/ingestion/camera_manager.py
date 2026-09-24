@@ -35,6 +35,11 @@ class CameraRecord:
     name: str
     source_type: SourceType
     adapter: SensorAdapter
+    modality: str = "STANDARD"  # "STANDARD", "IR_NIGHT", "THERMAL"
+    # Per-camera ONNX input size. "auto" picks 640 for aerial/small-object
+    # sources (their objects are far smaller in frame) and 416 for fixed CCTV,
+    # where 640 nearly triples inference latency for no recall gain.
+    inference_size: str = "auto"
     location_label: str = "Sector Border Post"
     status: CameraStatus = CameraStatus.OFFLINE
     last_seen: Optional[datetime] = None
@@ -50,6 +55,8 @@ class CameraRecord:
             "camera_id": self.camera_id,
             "name": self.name,
             "source_type": self.source_type.value if hasattr(self.source_type, "value") else str(self.source_type),
+            "modality": self.modality,
+            "inference_size": self.inference_size,
             "location_label": self.location_label,
             "status": self.status.value,
             "resolution": info.get("resolution", f"{info.get('width', 1280)}x{info.get('height', 720)}"),
@@ -59,6 +66,10 @@ class CameraRecord:
             "dropped_frames": self.dropped_frames,
             "last_seen": self.last_seen.isoformat() if self.last_seen else None,
             "is_running": self.adapter.is_running if hasattr(self.adapter, "is_running") else False,
+            "last_error": self.last_error,
+            "codec": info.get("codec"),
+            "duration_sec": info.get("duration_sec"),
+            "source_path": info.get("video_path"),
         }
 
 
@@ -74,24 +85,29 @@ class CameraManager:
         camera_id: str,
         adapter: SensorAdapter,
         name: Optional[str] = None,
-        location_label: str = "Sector Alpha",
+        location_label: str = "Sector Border Post",
+        modality: str = "STANDARD",
         source_type: Optional[SourceType] = None,
+        inference_size: str = "auto",
     ) -> CameraRecord:
-        """Register a camera adapter in the manager."""
+        """Register a new camera adapter and allocate its operational record."""
         clean_id = str(camera_id).strip()
         cam_name = name or f"Camera {clean_id}"
         src = source_type or adapter.source
+        mod = modality or getattr(adapter, "modality", "STANDARD")
 
         record = CameraRecord(
             camera_id=clean_id,
             name=cam_name,
             source_type=src,
             adapter=adapter,
+            modality=mod,
+            inference_size=inference_size or "auto",
             location_label=location_label,
             status=CameraStatus.ONLINE if adapter.is_running else CameraStatus.OFFLINE,
         )
         self._cameras[clean_id] = record
-        logger.info(f"Registered camera '{clean_id}' ({cam_name}) in CameraManager")
+        logger.info(f"Registered camera '{clean_id}' ({cam_name}) [Modality: {mod}] in CameraManager")
         return record
 
     async def deregister_camera(self, camera_id: str) -> bool:
@@ -142,6 +158,10 @@ class CameraManager:
         except Exception as err:
             logger.error(f"Error stopping camera '{clean_id}': {err}")
             return False
+
+    def get_running_cameras(self) -> List[str]:
+        """Return list of camera IDs that are currently running/streaming."""
+        return [cid for cid, rec in self._cameras.items() if rec.adapter and rec.adapter.is_running]
 
     async def reconnect_camera(self, camera_id: str, max_retries: int = 3, base_delay: float = 0.5) -> bool:
         """Attempt to reconnect and re-initialize a degraded or dropped camera stream with exponential backoff."""
@@ -223,6 +243,15 @@ class CameraManager:
             record.last_error = str(err)
             logger.warning(f"Error reading frame from camera '{camera_id}': {err}")
             return None
+
+    async def remove_camera(self, camera_id: str) -> bool:
+        """Stop and unregister a camera from the active manager."""
+        if camera_id in self._cameras:
+            await self.stop_camera(camera_id)
+            del self._cameras[camera_id]
+            logger.info(f"CameraManager: Camera '{camera_id}' removed")
+            return True
+        return False
 
     async def stop_all(self) -> None:
         """Gracefully stop all running camera streams."""

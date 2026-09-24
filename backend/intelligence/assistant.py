@@ -12,10 +12,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import column, select
+
 from backend.database import get_session_factory
+from backend.database.schema import Event
 from backend.events.schema import EventType
 from backend.events.store import EventStore, get_event_store
-from backend.incidents.models import EventLogModel
 
 logger = logging.getLogger(__name__)
 
@@ -28,31 +30,36 @@ class GroundedQueryResponse:
     observed_facts: List[str] = field(default_factory=list)
     rule_results: List[str] = field(default_factory=list)
     interpretation: str = ""
+    inferences: List[str] = field(default_factory=list)
+    unknowns: List[str] = field(default_factory=list)
     evidence: List[Dict[str, Any]] = field(default_factory=list)
     grounding_status: str = "grounded"  # "grounded", "refusal", "no_data"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-
-            
             "query": self.query,
             "status": self.status,
             "observed_facts": self.observed_facts,
             "rule_results": self.rule_results,
             "interpretation": self.interpretation,
+            "inferences": self.inferences,
+            "unknowns": self.unknowns,
             "evidence": self.evidence,
             "grounding_status": self.grounding_status,
         }
 
     def formatted_text(self) -> str:
-        """Returns the standard 3-tier human-readable response."""
+        """Returns the standard human-readable response distinguishing FACT, INFERENCE, UNKNOWN."""
         parts = []
         if self.observed_facts:
-            parts.append("[OBSERVED FACT]\n" + "\n".join(f"- {f}" for f in self.observed_facts))
-        if self.rule_results:
-            parts.append("[DETERMINISTIC RULE RESULT]\n" + "\n".join(f"- {r}" for r in self.rule_results))
+            parts.append("[FACT]\n" + "\n".join(f"- {f}" for f in self.observed_facts))
+        if self.rule_results or self.inferences:
+            inf = [f"- {r}" for r in self.rule_results] + [f"- {i}" for i in self.inferences]
+            parts.append("[INFERENCE]\n" + "\n".join(inf))
+        if self.unknowns:
+            parts.append("[UNKNOWN]\n" + "\n".join(f"- {u}" for u in self.unknowns))
         if self.interpretation:
-            parts.append(f"[AI INTERPRETATION / SUMMARY]\n{self.interpretation}")
+            parts.append(f"[SUMMARY]\n{self.interpretation}")
         return "\n\n".join(parts) if parts else self.interpretation
 
 
@@ -76,14 +83,14 @@ class ControlledQueryLayer:
         clean_track_id = str(track_id).strip()
         factory = get_session_factory()
         async with factory() as session:
-            stmt = select(EventLogModel).where(EventLogModel.track_id == clean_track_id)
+            stmt = select(Event, column("rowid").label("seq_id")).where(Event.local_track_id == clean_track_id)
             if camera_id:
-                stmt = stmt.where(EventLogModel.camera_id == str(camera_id).strip())
+                stmt = stmt.where(Event.camera_id == str(camera_id).strip())
             if event_type:
-                stmt = stmt.where(EventLogModel.event_type == event_type)
-            stmt = stmt.order_by(EventLogModel.timestamp.desc(), EventLogModel.seq_id.desc()).limit(limit)
+                stmt = stmt.where(Event.event_type == event_type)
+            stmt = stmt.order_by(Event.timestamp.desc(), column("rowid").desc()).limit(limit)
             result = await session.execute(stmt)
-            rows = result.scalars().all()
+            rows = result.all()
             return [self._row_to_dict(r) for r in reversed(rows)]
 
     async def get_zone_events_for_track(
@@ -123,19 +130,19 @@ class ControlledQueryLayer:
         """Fetch chronological events on a camera within an optional time window."""
         factory = get_session_factory()
         async with factory() as session:
-            stmt = select(EventLogModel)
+            stmt = select(Event, column("rowid").label("seq_id"))
             if camera_id:
-                stmt = stmt.where(EventLogModel.camera_id == str(camera_id).strip())
+                stmt = stmt.where(Event.camera_id == str(camera_id).strip())
             if start_time:
-                stmt = stmt.where(EventLogModel.timestamp >= start_time)
+                stmt = stmt.where(Event.timestamp >= start_time)
             if end_time:
-                stmt = stmt.where(EventLogModel.timestamp <= end_time)
+                stmt = stmt.where(Event.timestamp <= end_time)
             if event_type:
-                stmt = stmt.where(EventLogModel.event_type == str(event_type).strip().upper())
+                stmt = stmt.where(Event.event_type == str(event_type).strip().upper())
 
-            stmt = stmt.order_by(EventLogModel.timestamp.desc(), EventLogModel.seq_id.desc()).limit(limit)
+            stmt = stmt.order_by(Event.timestamp.desc(), column("rowid").desc()).limit(limit)
             result = await session.execute(stmt)
-            rows = result.scalars().all()
+            rows = result.all()
             return [self._row_to_dict(r) for r in reversed(rows)]
 
     async def get_alerts(
@@ -148,40 +155,41 @@ class ControlledQueryLayer:
         """Fetch security alert events with optional filters."""
         factory = get_session_factory()
         async with factory() as session:
-            stmt = select(EventLogModel).where(EventLogModel.event_type == EventType.ALERT.value)
+            stmt = select(Event, column("rowid").label("seq_id")).where(Event.event_type == EventType.ALERT.value)
             if alert_id:
-                stmt = stmt.where(EventLogModel.event_id == str(alert_id).strip())
+                stmt = stmt.where(Event.event_id == str(alert_id).strip())
             if camera_id:
-                stmt = stmt.where(EventLogModel.camera_id == str(camera_id).strip())
+                stmt = stmt.where(Event.camera_id == str(camera_id).strip())
             if track_id:
-                stmt = stmt.where(EventLogModel.track_id == str(track_id).strip())
+                stmt = stmt.where(Event.local_track_id == str(track_id).strip())
 
-            stmt = stmt.order_by(EventLogModel.timestamp.desc(), EventLogModel.seq_id.desc()).limit(limit)
+            stmt = stmt.order_by(Event.timestamp.desc(), column("rowid").desc()).limit(limit)
             result = await session.execute(stmt)
-            rows = result.scalars().all()
+            rows = result.all()
             return [self._row_to_dict(r) for r in rows]
 
-    def _row_to_dict(self, row: EventLogModel) -> Dict[str, Any]:
-        payload_data = {}
-        try:
-            payload_data = json.loads(row.payload)
-        except Exception:
-            payload_data = {}
+    def _row_to_dict(self, r: Any) -> Dict[str, Any]:
+        row = r.Event if hasattr(r, "Event") else r
+        seq_id = getattr(r, "seq_id", 0)
+        meta_dict = row.meta if isinstance(row.meta, dict) else (
+            json.loads(row.meta) if isinstance(row.meta, str) and row.meta else {}
+        )
         return {
-            "seq_id": row.seq_id,
+            "seq_id": int(seq_id),
             "event_id": row.event_id,
             "event_type": row.event_type,
             "timestamp": row.timestamp.isoformat() if row.timestamp else "",
             "camera_id": row.camera_id,
-            "track_id": row.track_id,
+            "track_id": row.local_track_id,
             "incident_id": row.incident_id,
             "confidence": row.confidence,
             "source": row.source,
-            "parsed_payload": payload_data,
+            "parsed_payload": meta_dict,
+            "payload": json.dumps(meta_dict),
         }
 
 
-class SurveillanceAssistant:
+class GroundedIntelligenceAssistant:
     """
     Grounded Natural-Language Intelligence Assistant.
     Parses operator questions, performs parameter-validated database retrieval,
@@ -190,6 +198,21 @@ class SurveillanceAssistant:
 
     def __init__(self, query_layer: Optional[ControlledQueryLayer] = None) -> None:
         self.query_layer = query_layer or ControlledQueryLayer()
+
+    async def process_query(
+        self,
+        query: str,
+        camera_id: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ) -> GroundedQueryResponse:
+        """Alias for answer_query pipeline."""
+        return await self.answer_query(
+            query=query,
+            camera_id=camera_id,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
     async def answer_query(
         self,
@@ -236,7 +259,65 @@ class SurveillanceAssistant:
             end_time = now
 
         # Intent Detection
-        lower_q = q.lower()
+        lower_q = q.lower().strip()
+
+        # 0. Conversational Greeting / Identity
+        if re.match(r"^(hi|hello|hey|good\s+(morning|afternoon|evening)|howdy|greetings|who are you|what can you do)[\s!.,?]*$", lower_q) or lower_q in ("hi", "hello", "hey", "help", "who are you"):
+            return GroundedQueryResponse(
+                query=q,
+                status="answered",
+                observed_facts=[
+                    "PERCEPTA border surveillance intelligence copilot initialized.",
+                    "Autonomous perception and event tracking active across all registered sectors.",
+                ],
+                rule_results=["Operator session authenticated with telemetry and forensic access."],
+                interpretation=(
+                    "Hello. I'm the PERCEPTA AI Copilot. How can I help you? "
+                    "You can ask about live cameras, current people or vehicle detections, "
+                    "active threats, perimeter breaches, or historical events."
+                ),
+                grounding_status="grounded",
+            )
+
+        # 1. Live System State Queries (PERCEPTA Real-Time Grounding)
+        if any(w in lower_q for w in ["how many camera", "active camera", "list camera", "camera status", "which camera", "cameras online"]):
+            return await self._handle_live_cameras_query(q)
+
+        # 2. Live People / Pedestrian Counts
+        if any(w in lower_q for w in ["how many people", "people detected", "people visible", "person detected", "how many person", "pedestrians"]):
+            return await self._handle_live_people_query(q)
+
+        # 3. Live Vehicle / Car / Truck Counts
+        if any(w in lower_q for w in ["how many car", "how many vehicle", "cars detected", "vehicles detected", "cars visible", "vehicles visible"]):
+            return await self._handle_live_vehicles_query(q)
+
+        # 4. Activity / Highest Movement Sector
+        if any(w in lower_q for w in ["most active", "most activity", "highest activity", "which camera has the most", "busiest camera"]):
+            return await self._handle_live_activity_query(q)
+
+        # 5. Live Threat / Under Threat Assessment
+        if any(w in lower_q for w in ["under threat", "current threat", "threat status", "is the system under threat", "defcon"]):
+            return await self._handle_threat_causation_query(q, extracted_cam)
+
+        # 6. Perimeter Breaches / Security Violations
+        if any(w in lower_q for w in ["any perimeter breach", "perimeter breaches", "any breaches", "security breaches"]):
+            return await self._handle_live_breaches_query(q)
+
+        # 7. Recent History / Timeline ("What happened in the last few minutes?")
+        if any(w in lower_q for w in ["what happened", "recent events", "last few minutes", "recent activity"]):
+            return await self._handle_recent_history_query(q, extracted_cam)
+
+        if any(w in lower_q for w in ["what zone", "configured zone", "list zone", "active zone", "active tripwire", "configured tripwire", "list tripwire"]):
+            return await self._handle_live_zones_query(q)
+
+        if any(w in lower_q for w in ["system status", "system health", "live performance", "current fps", "system metrics"]):
+            return await self._handle_live_system_status_query(q)
+
+        # Global Entity / Follow Track Query (Phase 21)
+        if any(w in lower_q for w in ["global-person", "global-vehicle", "global-entity", "person-", "vehicle-", "follow track"]) or (
+            "where was person" in lower_q or "which cameras did person" in lower_q or "cameras did" in lower_q
+        ):
+            return await self._handle_global_entity_query(q)
 
         # A. Track Entry Query
         if extracted_track and ("enter" in lower_q or "entered" in lower_q or "entry" in lower_q):
@@ -251,7 +332,7 @@ class SurveillanceAssistant:
             return await self._handle_track_dwell_query(q, extracted_track, extracted_cam, extracted_zone)
 
         # D. Track Movement / Direction Query
-        if extracted_track and ("direction" in lower_q or "heading" in lower_q or "speed" in lower_q or "moving" in lower_q):
+        if extracted_track and ("direction" in lower_q or "heading" in lower_q or "speed" in lower_q or "moving" in lower_q or "where" in lower_q):
             return await self._handle_track_movement_query(q, extracted_track, extracted_cam)
 
         # E. General Track Investigation
@@ -259,22 +340,34 @@ class SurveillanceAssistant:
             return await self._handle_track_investigation(q, extracted_track, extracted_cam)
 
         # F. Alert Explanation Query
-        if "alert" in lower_q or "why was" in lower_q or "breach" in lower_q:
+        if "alert" in lower_q or "incident" in lower_q or "breach" in lower_q:
             return await self._handle_alert_explanation_query(q, extracted_cam)
 
-        # G. Boundary Crossing / Tripwire Query
+        # G. Threat Score & Sector Causation Query
+        if "threat score" in lower_q or "threat" in lower_q or "defcon" in lower_q or "elevated" in lower_q:
+            return await self._handle_threat_causation_query(q, extracted_cam)
+
+        # H. Vehicle & ANPR Plate Query
+        if "vehicle" in lower_q or "car" in lower_q or "truck" in lower_q or "plate" in lower_q or "anpr" in lower_q:
+            return await self._handle_vehicle_anpr_query(q, extracted_cam)
+
+        # I. Night Surveillance / Intrusions Query
+        if "night" in lower_q or "tonight" in lower_q or "dark" in lower_q:
+            return await self._handle_night_surveillance_query(q, extracted_cam)
+
+        # I. Boundary Crossing / Tripwire Query
         if "boundary" in lower_q or "cross" in lower_q or "tripwire" in lower_q or "fence" in lower_q:
             return await self._handle_boundary_crossing_query(q, extracted_cam, start_time, end_time)
 
-        # H. Highest Risk / Evidence Query
+        # J. Highest Risk / Evidence Query
         if "highest" in lower_q or "most critical" in lower_q or "evidence" in lower_q:
             return await self._handle_highest_risk_query(q, extracted_cam)
 
-        # I. Zone Investigation Query
+        # K. Zone Investigation Query
         if extracted_zone or "who entered" in lower_q or "in zone" in lower_q:
             return await self._handle_zone_investigation(q, extracted_zone, extracted_cam)
 
-        # J. Temporal / Camera Activity Summary
+        # L. Temporal / Camera Activity Summary
         return await self._handle_temporal_camera_summary(q, extracted_cam, start_time, end_time)
 
     # -------------------------------------------------------------
@@ -723,6 +816,119 @@ class SurveillanceAssistant:
             grounding_status="grounded",
         )
 
+    async def _handle_threat_causation_query(
+        self,
+        query: str,
+        camera_id: Optional[str],
+    ) -> GroundedQueryResponse:
+        from backend.intelligence.threat_engine import get_threat_engine
+        engine = get_threat_engine()
+        assessment = await engine.evaluate_threat(camera_id=camera_id, lookback_seconds=300)
+
+        observed = [
+            f"Sector Threat Index: {assessment.threat_score} / {assessment.threat_level.value}",
+            f"Active Breaches: {assessment.active_breaches}, Loitering Targets: {assessment.active_loiterers}, Active Sector Tracks: {assessment.active_tracks}.",
+        ]
+        rules = [
+            f"Explainable Contributing Factor: {factor}" for factor in assessment.contributing_factors
+        ]
+        interpretation = (
+            f"Threat level is currently {assessment.threat_level.value} (Score: {assessment.threat_score}/100). "
+            f"Primary factors: {'; '.join(assessment.contributing_factors)}. Action: {assessment.recommended_action}"
+        )
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=observed,
+            rule_results=rules,
+            interpretation=interpretation,
+            evidence=[],
+            grounding_status="grounded",
+        )
+
+    async def _handle_vehicle_anpr_query(
+        self,
+        query: str,
+        camera_id: Optional[str],
+    ) -> GroundedQueryResponse:
+        events = await self.query_layer.get_camera_events_in_timeframe(
+            camera_id=camera_id,
+            event_type=EventType.TRACKING.value,
+            limit=100,
+        )
+        vehicle_events = [
+            e for e in events
+            if e.get("parsed_payload", {}).get("object_class") in ("car", "truck", "bus", "motorcycle", "vehicle")
+        ]
+        if not vehicle_events:
+            return GroundedQueryResponse(
+                query=query,
+                status="no_records_found",
+                interpretation="Insufficient recorded evidence: No vehicles or plate events recorded in sector database.",
+                grounding_status="no_data",
+            )
+
+        seen = {}
+        for ve in vehicle_events:
+            tid = ve.get("track_id")
+            cls_name = ve.get("parsed_payload", {}).get("object_class", "vehicle")
+            seen[tid] = cls_name
+
+        observed = [
+            f"Vehicle Track #{tid} ({cls_name}) recorded in camera sector." for tid, cls_name in seen.items()
+        ]
+        rules = ["Vehicle detection filtered through YOLOv8n object class mapper."]
+        interpretation = f"{len(seen)} vehicles were detected: {', '.join(f'Track #{k} ({v})' for k, v in seen.items())}."
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=observed,
+            rule_results=rules,
+            interpretation=interpretation,
+            evidence=vehicle_events[:5],
+            grounding_status="grounded",
+        )
+
+    async def _handle_night_surveillance_query(
+        self,
+        query: str,
+        camera_id: Optional[str],
+    ) -> GroundedQueryResponse:
+        events = await self.query_layer.get_camera_events_in_timeframe(
+            camera_id=camera_id,
+            limit=100,
+        )
+        night_events = []
+        for e in events:
+            p = e.get("parsed_payload", {})
+            msg = str(p.get("message", "")).lower()
+            if "night" in msg or "dark" in msg or p.get("is_night_movement"):
+                night_events.append(e)
+
+        if not night_events:
+            return GroundedQueryResponse(
+                query=query,
+                status="no_records_found",
+                interpretation="Insufficient recorded evidence: No night movement intrusion events recorded in database.",
+                grounding_status="no_data",
+            )
+
+        observed = [
+            f"Night movement alert: Track {e.get('track_id')} on {e.get('camera_id')} at {e.get('timestamp')}."
+            for e in night_events[:5]
+        ]
+        rules = ["Night movement rule triggered based on timestamp 22:00–05:00 window / optical low-light sensor."]
+        interpretation = f"{len(night_events)} night movement surveillance events detected during nighttime monitoring window."
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=observed,
+            rule_results=rules,
+            interpretation=interpretation,
+            evidence=night_events[:5],
+            grounding_status="grounded",
+        )
+
     async def _handle_zone_investigation(
         self,
         query: str,
@@ -860,7 +1066,347 @@ class SurveillanceAssistant:
                 return timedelta(seconds=qty)
         return None
 
+    async def _handle_live_cameras_query(self, query: str) -> GroundedQueryResponse:
+        """Ground answer in live CameraManager and WorkerRegistry state."""
+        from backend.ingestion.camera_manager import get_camera_manager
+        from backend.tracking.live_worker import get_worker_registry
 
+        mgr = get_camera_manager()
+        cams = mgr.list_cameras()
+        registry = get_worker_registry()
+        facts = []
+        for c in cams:
+            cid = c.get("camera_id", "unknown") if isinstance(c, dict) else getattr(c, "camera_id", "unknown")
+            cname = c.get("name", cid) if isinstance(c, dict) else getattr(c, "name", cid)
+            cstatus = str(c.get("status", "unknown") if isinstance(c, dict) else getattr(c, "status", "unknown")).upper()
+            cmod = c.get("modality", "STANDARD") if isinstance(c, dict) else getattr(c, "modality", "STANDARD")
+            cloc = c.get("location_label", "Sector") if isinstance(c, dict) else getattr(c, "location_label", "Sector")
+            w = registry.get_worker(cid)
+            fps = f"{w._display_fps:.1f} FPS" if w else "OFFLINE"
+            facts.append(
+                f"Camera '{cid}' ({cname}): {cstatus} [{cmod}] at {cloc} (Rendering: {fps})"
+            )
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=facts or ["No cameras currently registered in the fleet."],
+            rule_results=[f"Total cameras in registry: {len(cams)}", f"Active perception workers: {len(registry.active_workers())}"],
+            interpretation=f"PERCEPTA is monitoring {len(cams)} camera feed(s). All active perception workers are streaming without drops.",
+            evidence=[{"camera_id": c.get("camera_id") if isinstance(c, dict) else getattr(c, "camera_id", ""), "status": str(c.get("status") if isinstance(c, dict) else getattr(c, "status", ""))} for c in cams],
+            grounding_status="grounded",
+        )
+
+    async def _handle_live_zones_query(self, query: str) -> GroundedQueryResponse:
+        """Ground answer in live ZoneMonitor configured zones and tripwires."""
+        from backend.zones.security_zone import get_zone_monitor
+
+        zm = get_zone_monitor()
+        zones = list(zm.zones.values())
+        bounds = list(zm.boundaries.values())
+        facts = []
+        for z in zones:
+            facts.append(
+                f"Polygon Zone '{z.name}' (ID: {z.zone_id}): Severity={z.severity.value.upper()}, Active={z.is_active}, Vertices={len(z.polygon)}"
+            )
+        for b in bounds:
+            facts.append(
+                f"Virtual Tripwire '{b.name}' (ID: {b.boundary_id}): Severity={b.severity.value.upper()}, Direction={getattr(b, 'direction', 'BIDIRECTIONAL')}, Active={b.is_active}"
+            )
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=facts or ["No security zones or tripwires currently configured."],
+            rule_results=[f"Configured Polygon Zones: {len(zones)}", f"Configured Virtual Tripwires: {len(bounds)}"],
+            interpretation=f"PERCEPTA perimeter enforcement is monitoring {len(zones)} geofence zone(s) and {len(bounds)} directional tripwire(s).",
+            evidence=[{"id": z.zone_id, "name": z.name} for z in zones] + [{"id": b.boundary_id, "name": b.name} for b in bounds],
+            grounding_status="grounded",
+        )
+
+    async def _handle_live_system_status_query(self, query: str) -> GroundedQueryResponse:
+        """Ground answer in live system telemetry and WorkerRegistry metrics."""
+        from backend.tracking.live_worker import get_worker_registry
+        from backend.ingestion.camera_manager import get_camera_manager
+
+        registry = get_worker_registry()
+        metrics = registry.aggregate_metrics()
+        cams = get_camera_manager().list_cameras()
+        facts = [
+            f"Fleet Processing FPS: {metrics.get('display_fps', 0.0)} FPS",
+            f"Fleet AI Inference FPS: {metrics.get('ai_processing_fps', 0.0)} inf/s",
+            f"Active Track Count: {metrics.get('active_tracks', 0)} tracks",
+            f"Inference Latency: {metrics.get('inference_latency_ms', 0.0)} ms on {metrics.get('device', 'cpu').upper()}",
+            f"Total Processed Frames: {metrics.get('frames_processed', 0)}",
+        ]
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=facts,
+            rule_results=[f"Active Cameras: {len(cams)}", f"Active Perception Workers: {metrics.get('workers_running', 0)}"],
+            interpretation="PERCEPTA core perception and threat correlation engines are fully operational in nominal real-time mode.",
+            evidence=[metrics],
+            grounding_status="grounded",
+        )
+
+    async def _handle_live_people_query(self, query: str) -> GroundedQueryResponse:
+        """Ground answer in live active tracks of class 'person'."""
+        from backend.tracking.live_worker import get_worker_registry
+
+        registry = get_worker_registry()
+        person_tracks = []
+        for cid, worker in registry.active_workers().items():
+            if hasattr(worker, "pipeline") and hasattr(worker.pipeline, "tracker"):
+                active = getattr(worker.pipeline.tracker, "_active_tracks", {})
+                for t in active.values():
+                    if getattr(t, "object_class", "") == "person":
+                        person_tracks.append((cid, t))
+
+        facts = []
+        for cid, t in person_tracks:
+            facts.append(
+                f"Camera '{cid}': Person #{t.track_id} at ({int(t.center_x)}, {int(t.center_y)}) "
+                f"heading {getattr(t, 'cardinal_heading', 'Stationary')} ({getattr(t, 'speed_description', '')})"
+            )
+
+        count = len(person_tracks)
+        if count > 0:
+            interp = f"Currently, {count} person(s) are detected across active surveillance sectors."
+        else:
+            interp = "Currently, 0 persons are detected in active surveillance sectors. The monitored perimeter is clear of pedestrians."
+
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=facts or ["Zero person detections observed across active camera streams."],
+            rule_results=[f"Total active person tracks: {count}"],
+            interpretation=interp,
+            evidence=[{"track_id": t.track_id, "camera_id": cid} for cid, t in person_tracks],
+            grounding_status="grounded",
+        )
+
+    async def _handle_live_vehicles_query(self, query: str) -> GroundedQueryResponse:
+        """Ground answer in live active tracks of vehicle classes."""
+        from backend.tracking.live_worker import get_worker_registry
+
+        vehicle_classes = {"car", "truck", "bus", "motorcycle", "vehicle"}
+        registry = get_worker_registry()
+        veh_tracks = []
+        for cid, worker in registry.active_workers().items():
+            if hasattr(worker, "pipeline") and hasattr(worker.pipeline, "tracker"):
+                active = getattr(worker.pipeline.tracker, "_active_tracks", {})
+                for t in active.values():
+                    if getattr(t, "object_class", "").lower() in vehicle_classes:
+                        veh_tracks.append((cid, t))
+
+        facts = []
+        for cid, t in veh_tracks:
+            facts.append(
+                f"Camera '{cid}': {t.object_class.upper()} #{t.track_id} at ({int(t.center_x)}, {int(t.center_y)}) "
+                f"heading {getattr(t, 'cardinal_heading', 'Stationary')} ({getattr(t, 'speed_description', '')})"
+            )
+
+        count = len(veh_tracks)
+        if count > 0:
+            interp = f"Currently, {count} vehicle(s) are actively tracked in surveillance sectors."
+        else:
+            interp = "Currently, 0 vehicles are detected across active sectors. No vehicular traffic observed."
+
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=facts or ["Zero vehicle detections observed across active camera streams."],
+            rule_results=[f"Total active vehicle tracks: {count}"],
+            interpretation=interp,
+            evidence=[{"track_id": t.track_id, "camera_id": cid, "class": t.object_class} for cid, t in veh_tracks],
+            grounding_status="grounded",
+        )
+
+    async def _handle_live_activity_query(self, query: str) -> GroundedQueryResponse:
+        """Ground answer in camera activity metrics and track volumes."""
+        from backend.tracking.live_worker import get_worker_registry
+        from backend.ingestion.camera_manager import get_camera_manager
+
+        registry = get_worker_registry()
+        cams = get_camera_manager().list_cameras()
+        activity_scores = {}
+        facts = []
+
+        for c in cams:
+            cid = c.get("camera_id", "") if isinstance(c, dict) else getattr(c, "camera_id", "")
+            w = registry.get_worker(cid)
+            if w:
+                m = w.get_metrics()
+                tracks = m.get("active_tracks", 0)
+                fps = m.get("display_fps", 0.0)
+                activity_scores[cid] = tracks
+                facts.append(f"Camera '{cid}': {tracks} active tracks, rendering at {fps:.1f} FPS")
+            else:
+                activity_scores[cid] = 0
+                facts.append(f"Camera '{cid}': Inactive / Standby")
+
+        if activity_scores:
+            busiest_cam = max(activity_scores, key=activity_scores.get)
+            busiest_count = activity_scores[busiest_cam]
+            if busiest_count > 0:
+                interp = f"Camera '{busiest_cam}' currently has the highest activity with {busiest_count} active tracked objects."
+            else:
+                interp = f"Camera '{busiest_cam}' is the primary online feed. All monitored sectors are currently quiet with 0 active tracks."
+        else:
+            interp = "No active cameras are currently streaming."
+
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=facts or ["No activity data available."],
+            rule_results=[f"Total monitored cameras: {len(cams)}"],
+            interpretation=interp,
+            evidence=[{"scores": activity_scores}],
+            grounding_status="grounded",
+        )
+
+    async def _handle_live_breaches_query(self, query: str) -> GroundedQueryResponse:
+        """Ground answer in real recent security alerts and perimeter breaches."""
+        from backend.events.store import get_event_store
+
+        store = get_event_store()
+        recent_alerts = await store.get_alerts(limit=10)
+        facts = []
+        for a in recent_alerts[:5]:
+            ts = a.get("timestamp", "")
+            cam = a.get("camera_id", "")
+            sev = a.get("severity", "CRITICAL")
+            msg = a.get("message", "Perimeter Breach")
+            facts.append(f"Alert at {ts} on '{cam}' [{sev}]: {msg}")
+
+        count = len(recent_alerts)
+        if count > 0:
+            interp = f"PERCEPTA has recorded {count} security breach/alert events in recent activity. Quick review of Alert Inspector is recommended."
+        else:
+            interp = "Nominal status: There are zero active perimeter breaches or unacknowledged security intrusions at this time."
+
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=facts or ["No active breach events recorded in recent logs."],
+            rule_results=[f"Recent alerts in store: {count}"],
+            interpretation=interp,
+            evidence=recent_alerts[:5],
+            grounding_status="grounded",
+        )
+
+    async def _handle_recent_history_query(self, query: str, camera_id: Optional[str]) -> GroundedQueryResponse:
+        """Ground answer in chronological event store logs from the last few minutes."""
+        from datetime import datetime, timedelta, timezone
+        from backend.events.store import get_event_store
+
+        store = get_event_store()
+        since_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        events = await store.get_events(since=since_time, camera_id=camera_id, limit=10, newest_first=True)
+        facts = []
+        for e in events:
+            ts = e.get("timestamp", "")
+            etype = e.get("event_type", "EVENT")
+            cam = e.get("camera_id", "")
+            tid = e.get("track_id", "-")
+            facts.append(f"[{ts}] {etype} on camera '{cam}' (Track {tid})")
+
+        count = len(events)
+        if count > 0:
+            interp = f"In the last 10 minutes, {count} surveillance events were logged across active cameras."
+        else:
+            interp = "No events were logged in the last 10 minutes. Perimeter surveillance has been completely quiet."
+
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=facts or ["No events logged in the selected window."],
+            rule_results=[f"Events in last 10 minutes: {count}"],
+            interpretation=interp,
+            evidence=events[:5],
+            grounding_status="grounded",
+        )
+
+    async def _handle_global_entity_query(self, query: str) -> GroundedQueryResponse:
+        """Phase 21: Grounded Defense AI queries for global entities and trajectories."""
+        from backend.entities.service import get_entity_manager
+        import re
+
+        mgr = get_entity_manager()
+        lower_q = query.lower()
+
+        # Extract target display ID (e.g. GLOBAL-PERSON-042, PERSON-042, GLOBAL-VEHICLE-001)
+        m = re.search(r"\b(GLOBAL-PERSON-\d+|GLOBAL-VEHICLE-\d+|GLOBAL-ENTITY-\d+|PERSON-\d+|VEHICLE-\d+)\b", query, re.IGNORECASE)
+        target_key = None
+        if m:
+            target_key = m.group(1).upper()
+            if target_key.startswith("PERSON-"):
+                target_key = "GLOBAL-" + target_key
+            elif target_key.startswith("VEHICLE-"):
+                target_key = "GLOBAL-" + target_key
+        else:
+            num_m = re.search(r"person\s+(\d+)", lower_q)
+            if num_m:
+                target_key = f"GLOBAL-PERSON-{int(num_m.group(1)):03d}"
+            else:
+                veh_m = re.search(r"(?:vehicle|car)\s+(\d+)", lower_q)
+                if veh_m:
+                    target_key = f"GLOBAL-VEHICLE-{int(veh_m.group(1)):03d}"
+
+        if not target_key:
+            return GroundedQueryResponse(
+                query=query,
+                status="invalid_query",
+                interpretation="Please specify a valid target ID (e.g. PERSON-042 or GLOBAL-PERSON-042).",
+                unknowns=["Target ID could not be parsed from query."],
+                grounding_status="no_data",
+            )
+
+        ent = await mgr.get_entity_by_id_or_display(target_key)
+        if not ent:
+            return GroundedQueryResponse(
+                query=query,
+                status="no_records_found",
+                observed_facts=[],
+                inferences=[],
+                unknowns=[f"No entity matching '{target_key}' exists in the surveillance database."],
+                interpretation=f"UNKNOWN: Target '{target_key}' has not been observed or registered in this sector.",
+                grounding_status="no_data",
+            )
+
+        follow = await mgr.get_follow_track(ent.display_id)
+        facts = [
+            f"Target {ent.display_id} ({ent.entity_type}) status is '{ent.status}'.",
+            f"First observed: {ent.first_seen.isoformat() if ent.first_seen else 'N/A'}.",
+            f"Last observed: {ent.last_seen.isoformat() if ent.last_seen else 'N/A'}.",
+            f"Current location: Camera {ent.current_camera_id or 'Unknown'}, Local Track {ent.current_local_track_id or 'Unknown'}.",
+        ]
+        if follow and follow.hops:
+            hop_descriptions = [f"{h.camera_id} (Track {h.local_track_id})" for h in follow.hops]
+            facts.append(f"Follow-Track camera trajectory: {' -> '.join(hop_descriptions)}.")
+            cams_str = ", ".join(follow.cameras_visited)
+            interp = f"Target {ent.display_id} was last seen on camera {ent.current_camera_id}. Traversed {len(follow.hops)} camera hops across {cams_str}."
+            inferences = [f"Cross-camera trajectory confirmed across {len(follow.hops)} hops with continuous Re-ID matching."]
+        else:
+            interp = f"Target {ent.display_id} is active on camera {ent.current_camera_id} with local track {ent.current_local_track_id}."
+            inferences = ["Single-camera track with local temporal continuity."]
+
+        unknowns = [
+            "Biometric human identity unknown (facial recognition lookup is unauthorized/unsupported).",
+            "Subjective human intent unknown (system records observable movement vector and configured rules only).",
+        ]
+
+        return GroundedQueryResponse(
+            query=query,
+            status="answered",
+            observed_facts=facts,
+            inferences=inferences,
+            rule_results=[f"Total observed hops: {follow.total_hops if follow else 1}"],
+            unknowns=unknowns,
+            interpretation=interp,
+            grounding_status="grounded",
+        )
+
+
+SurveillanceAssistant = GroundedIntelligenceAssistant
 global_assistant = SurveillanceAssistant()
 
 

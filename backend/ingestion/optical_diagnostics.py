@@ -2,6 +2,7 @@
 Border Intelligence Optical Quality & Lens Tampering Diagnostics Module.
 Analyzes CCTV video frames for physical lens occlusion, spray tampering, blinding glare, and optical degradation.
 """
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
 import cv2
@@ -16,6 +17,7 @@ class SignalQualityStatus(str, Enum):
     OCCLUDED_OR_BLURRED = "OCCLUDED_OR_BLURRED"
     BLINDED_GLARE = "BLINDED_GLARE"
     LOW_LIGHT_DEGRADED = "LOW_LIGHT_DEGRADED"
+    STREAM_FROZEN = "STREAM_FROZEN"
 
 
 class CameraDiagnostics(BaseModel):
@@ -29,9 +31,29 @@ class CameraDiagnostics(BaseModel):
     diagnosis_message: str
 
 
-def evaluate_optical_quality(image: np.ndarray, camera_id: str = "CAM-01") -> CameraDiagnostics:
+def is_night_movement_condition(
+    timestamp: Optional[datetime] = None,
+    brightness_mean: float = 80.0,
+    night_start_hour: int = 22,
+    night_end_hour: int = 5,
+) -> bool:
     """
-    Evaluate optical signal quality and lens tampering metrics using fast NumPy/OpenCV matrix math.
+    Check if a surveillance event occurs during night hours or severe low-light conditions.
+    """
+    ts = timestamp or datetime.now(timezone.utc)
+    hour = ts.hour
+    is_night_hours = (hour >= night_start_hour or hour < night_end_hour)
+    is_sensor_dark = brightness_mean < 35.0
+    return is_night_hours or is_sensor_dark
+
+
+def evaluate_optical_quality(
+    image: np.ndarray,
+    camera_id: str = "CAM-01",
+    prev_image: Optional[np.ndarray] = None,
+) -> CameraDiagnostics:
+    """
+    Evaluate optical signal quality, lens tampering, and stream freeze metrics using fast NumPy/OpenCV matrix math.
     Execution time: < 0.2ms per frame.
     """
     if image is None or image.size == 0:
@@ -65,8 +87,20 @@ def evaluate_optical_quality(image: np.ndarray, camera_id: str = "CAM-01") -> Ca
     glare_pct = round((glare_pixels / total_pixels) * 100.0, 1)
     dark_pct = round((dark_pixels / total_pixels) * 100.0, 1)
 
-    # 3. Determine Optical Diagnosis
-    if glare_pct >= 35.0:
+    # 3. Stream Freeze Detection (if previous frame provided)
+    is_frozen = False
+    if prev_image is not None and prev_image.size > 0:
+        if prev_image.shape == image.shape:
+            diff = cv2.absdiff(image, prev_image)
+            if float(np.mean(diff)) < 0.05:
+                is_frozen = True
+
+    # 4. Determine Optical Diagnosis
+    if is_frozen:
+        status = SignalQualityStatus.STREAM_FROZEN
+        tampered = True
+        msg = f"CAMERA HEALTH WARNING: Stream frozen / video playback stalled on '{camera_id}'."
+    elif glare_pct >= 35.0:
         status = SignalQualityStatus.BLINDED_GLARE
         tampered = True
         msg = f"TAMPER/OPTICAL WARNING: High blinding glare / saturation detected ({glare_pct}% overexposed)."

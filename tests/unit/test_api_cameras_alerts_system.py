@@ -49,9 +49,19 @@ async def test_api_cameras_endpoints():
         assert r_stop.status_code == 200
         assert r_stop.json()["status"] == "stopped"
 
-        # 5. Non-existent camera returns 404
+        # 5. Delete camera
+        r_del = await client.delete("/api/cameras/cam_api_test")
+        assert r_del.status_code == 200
+        assert r_del.json()["status"] == "deregistered"
+        assert manager.get_camera("cam_api_test") is None
+
+        # 6. Non-existent camera returns 404
         r_404 = await client.get("/api/cameras/non_existent_camera_id")
         assert r_404.status_code == 404
+
+        # 7. Deleting non-existent camera returns 404
+        r_del_404 = await client.delete("/api/cameras/non_existent_camera_id")
+        assert r_del_404.status_code == 404
 
 
 @pytest.mark.asyncio

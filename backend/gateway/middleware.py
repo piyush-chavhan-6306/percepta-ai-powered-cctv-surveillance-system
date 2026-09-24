@@ -35,12 +35,12 @@ def log_gateway_startup_banner() -> None:
     settings = get_settings()
     if settings.DEMO_MODE:
         print("\n" + "=" * 68)
-        print("  [BORDER INTELLIGENCE API GATEWAY]  --  DEMO_MODE IS ACTIVE")
+        print("  [PERCEPTA API GATEWAY]  --  DEMO_MODE IS ACTIVE")
         print("  Authentication is currently optional for seamless evaluation.")
         print("  JWT Token Authentication and RBAC endpoints remain functional.")
         print("=" * 68 + "\n")
     else:
         print("\n" + "=" * 68)
-        print("  [BORDER INTELLIGENCE API GATEWAY]  --  STRICT AUTH ACTIVE")
+        print("  [PERCEPTA API GATEWAY]  --  STRICT AUTH ACTIVE")
         print("  All requests must supply 'Authorization: Bearer <token>'")
         print("=" * 68 + "\n")

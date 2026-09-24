@@ -137,11 +137,17 @@ def draw_zones(
 ) -> None:
     """Render configured geofence polygons and directional tripwires."""
     overlay = None
+    h_canvas, w_canvas = img.shape[:2]
+
     for zone in zones:
         if not zone.is_active or not zone.polygon or len(zone.polygon) < 3:
             continue
         color = _severity_color(zone.severity)
-        pts = np.array([[int(x), int(y)] for x, y in zone.polygon], dtype=np.int32)
+        is_normalized = all(0.0 <= p[0] <= 1.0 and 0.0 <= p[1] <= 1.0 for p in zone.polygon)
+        if is_normalized:
+            pts = np.array([[int(round(x * w_canvas)), int(round(y * h_canvas))] for x, y in zone.polygon], dtype=np.int32)
+        else:
+            pts = np.array([[int(round(x)), int(round(y))] for x, y in zone.polygon], dtype=np.int32)
 
         # Translucent fill, drawn on a scratch layer so alpha stays cheap.
         if overlay is None:
@@ -158,21 +164,43 @@ def draw_zones(
         if not boundary.is_active:
             continue
         color = _severity_color(boundary.severity)
-        p1 = (int(boundary.pt1[0]), int(boundary.pt1[1]))
-        p2 = (int(boundary.pt2[0]), int(boundary.pt2[1]))
+        is_norm = (0.0 <= boundary.pt1[0] <= 1.0 and 0.0 <= boundary.pt1[1] <= 1.0 and
+                   0.0 <= boundary.pt2[0] <= 1.0 and 0.0 <= boundary.pt2[1] <= 1.0)
+        if is_norm:
+            p1 = (int(round(boundary.pt1[0] * w_canvas)), int(round(boundary.pt1[1] * h_canvas)))
+            p2 = (int(round(boundary.pt2[0] * w_canvas)), int(round(boundary.pt2[1] * h_canvas)))
+        else:
+            p1 = (int(round(boundary.pt1[0])), int(round(boundary.pt1[1])))
+            p2 = (int(round(boundary.pt2[0])), int(round(boundary.pt2[1])))
         cv2.line(img, p1, p2, color, 2, cv2.LINE_AA)
         # Endpoint pips plus a mid-segment normal arrow showing crossing direction.
         cv2.circle(img, p1, 4, color, -1, cv2.LINE_AA)
         cv2.circle(img, p2, 4, color, -1, cv2.LINE_AA)
         mid = ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2)
-        dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-        norm = float(np.hypot(dx, dy)) or 1.0
-        nx, ny = -dy / norm, dx / norm  # left-hand normal
-        cv2.arrowedLine(
-            img, mid, (int(mid[0] + nx * 26), int(mid[1] + ny * 26)),
-            color, 2, cv2.LINE_AA, tipLength=0.35,
-        )
-        _label(img, f"{boundary.name}".upper(), p1[0], p1[1], color, 0.40)
+        direction = getattr(boundary, "direction", "BIDIRECTIONAL").upper()
+        arrow_len = 26
+        if direction in ("NORTH", "UP", "INWARD"):
+            target = (mid[0], mid[1] - arrow_len)
+            cv2.arrowedLine(img, mid, target, color, 2, cv2.LINE_AA, tipLength=0.35)
+        elif direction in ("SOUTH", "DOWN", "OUTWARD"):
+            target = (mid[0], mid[1] + arrow_len)
+            cv2.arrowedLine(img, mid, target, color, 2, cv2.LINE_AA, tipLength=0.35)
+        elif direction in ("EAST", "RIGHT", "LEFT_TO_RIGHT"):
+            target = (mid[0] + arrow_len, mid[1])
+            cv2.arrowedLine(img, mid, target, color, 2, cv2.LINE_AA, tipLength=0.35)
+        elif direction in ("WEST", "LEFT", "RIGHT_TO_LEFT"):
+            target = (mid[0] - arrow_len, mid[1])
+            cv2.arrowedLine(img, mid, target, color, 2, cv2.LINE_AA, tipLength=0.35)
+        else:  # BIDIRECTIONAL
+            dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+            norm = float(np.hypot(dx, dy)) or 1.0
+            nx, ny = -dy / norm, dx / norm
+            t1 = (int(mid[0] + nx * 20), int(mid[1] + ny * 20))
+            t2 = (int(mid[0] - nx * 20), int(mid[1] - ny * 20))
+            cv2.arrowedLine(img, mid, t1, color, 2, cv2.LINE_AA, tipLength=0.35)
+            cv2.arrowedLine(img, mid, t2, color, 2, cv2.LINE_AA, tipLength=0.35)
+
+        _label(img, f"{boundary.name} [{direction}]".upper(), p1[0], p1[1], color, 0.40)
 
 
 def draw_tracks(
@@ -180,32 +208,107 @@ def draw_tracks(
     tracks: Sequence[TrackedObject],
     show_trails: bool = True,
 ) -> None:
-    """Render tracked object boxes, stable IDs, confidence, and motion trails."""
+    """Render tracked object boxes, direction arrows, cardinal headings, and motion trails."""
+    import math
+    h_canvas, w_canvas = img.shape[:2]
+
     for track in tracks:
-        box = track.bounding_box
-        if not box or len(box) < 4:
-            continue
-        x1, y1, x2, y2 = (int(round(v)) for v in box[:4])
+        norm_box = getattr(track, "normalized_box", None)
+        if norm_box and len(norm_box) >= 4 and all(0.0 <= v <= 1.0 for v in norm_box):
+            x1 = int(round(norm_box[0] * w_canvas))
+            y1 = int(round(norm_box[1] * h_canvas))
+            x2 = int(round(norm_box[2] * w_canvas))
+            y2 = int(round(norm_box[3] * h_canvas))
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+        else:
+            box = track.bounding_box
+            if not box or len(box) < 4:
+                continue
+            x1, y1, x2, y2 = (int(round(v)) for v in box[:4])
+            cx, cy = int(round(track.center_x)), int(round(track.center_y))
         predicted = track.provenance == "prediction"
         color = _track_color(track)
 
+        # 1. Bounding box — solid for real YOLO detections, dashed for Kalman predictions
         if predicted:
-            # Inferred position on a stride-skipped frame: dashed + dimmed so the
-            # operator can tell measurement from extrapolation.
-            _dashed_rect(img, x1, y1, x2, y2, _dim(color), 2)
+            _dashed_rect(img, x1, y1, x2, y2, color, 2)
         else:
             cv2.rectangle(img, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
 
-        conf_pct = int(round(track.confidence * 100))
-        suffix = " ~" if predicted else ""
-        _label(img, f"{track.track_id} {track.object_class} {conf_pct}%{suffix}", x1, y1, color)
+        # Tactical corner brackets for military/C2 look (solid for detections, dimmer for predictions)
+        bracket_color = _dim(C2_WHITE, 0.5) if predicted else C2_WHITE
+        corner_len = min(12, max(6, (x2 - x1) // 4, (y2 - y1) // 4))
+        # Top-left
+        cv2.line(img, (x1, y1), (x1 + corner_len, y1), bracket_color, 2, cv2.LINE_AA)
+        cv2.line(img, (x1, y1), (x1, y1 + corner_len), bracket_color, 2, cv2.LINE_AA)
+        # Top-right
+        cv2.line(img, (x2, y1), (x2 - corner_len, y1), bracket_color, 2, cv2.LINE_AA)
+        cv2.line(img, (x2, y1), (x2, y1 + corner_len), bracket_color, 2, cv2.LINE_AA)
+        # Bottom-left
+        cv2.line(img, (x1, y2), (x1 + corner_len, y2), bracket_color, 2, cv2.LINE_AA)
+        cv2.line(img, (x1, y2), (x1, y2 - corner_len), bracket_color, 2, cv2.LINE_AA)
+        # Bottom-right
+        cv2.line(img, (x2, y2), (x2 - corner_len, y2), bracket_color, 2, cv2.LINE_AA)
+        cv2.line(img, (x2, y2), (x2, y2 - corner_len), bracket_color, 2, cv2.LINE_AA)
 
+        # 2. Draw Direction Arrow from Centroid when moving
+        heading = getattr(track, "cardinal_heading", "STATIONARY")
+        dir_deg = getattr(track, "direction_deg", 0.0)
+        is_moving = heading != "STATIONARY"
+
+        if is_moving:
+            rad = math.radians(dir_deg)
+            arrow_len = 24
+            target_x = int(cx + math.cos(rad) * arrow_len)
+            target_y = int(cy + math.sin(rad) * arrow_len)
+            # Centroid anchor dot
+            cv2.circle(img, (cx, cy), 3, color, -1, cv2.LINE_AA)
+            cv2.arrowedLine(
+                img,
+                (cx, cy),
+                (target_x, target_y),
+                C2_WHITE,
+                2,
+                cv2.LINE_AA,
+                tipLength=0.35,
+            )
+
+        # 3. Tactical Label Chip
+        conf_pct = int(round(track.confidence * 100))
+        speed_text = getattr(track, "speed_description", "Stationary")
+        pred_tag = " [PRED]" if predicted else ""
+
+        # Cross-camera global identity (Re-ID layer). Unconfirmed links are
+        # marked with '?' so an operator never mistakes a probable link for a
+        # certain one.
+        gid = getattr(track, "global_person_id", "") or ""
+        if gid:
+            gid_tag = f" {gid}" if getattr(track, "global_person_confirmed", False) else f" {gid}?"
+        else:
+            gid_tag = ""
+
+        if is_moving:
+            label_text = f"{track.object_class.upper()} #{track.track_id}{gid_tag} -> {heading} ({speed_text}){pred_tag}"
+        else:
+            label_text = f"{track.object_class.upper()} #{track.track_id}{gid_tag} {conf_pct}%{pred_tag}"
+            
+        _label(img, label_text, x1, y1, color)
+
+        # 4. Motion Trails
         if show_trails and len(track.trajectory) > 1:
+            trail_pts = track.trajectory[-24:]
+            # If canvas dimensions differ from track coordinates, scale trail points proportionally
+            scale_x = (x2 - x1) / float(track.bounding_box[2] - track.bounding_box[0]) if track.bounding_box and (track.bounding_box[2] > track.bounding_box[0]) else 1.0
+            scale_y = (y2 - y1) / float(track.bounding_box[3] - track.bounding_box[1]) if track.bounding_box and (track.bounding_box[3] > track.bounding_box[1]) else 1.0
             trail = np.array(
-                [[int(cx), int(cy)] for cx, cy in track.trajectory[-28:]],
+                [[int(round(pt[0] * scale_x)), int(round(pt[1] * scale_y))] for pt in trail_pts],
                 dtype=np.int32,
             )
             cv2.polylines(img, [trail], False, _dim(color, 0.75), 1, cv2.LINE_AA)
+            # Draw tiny endpoint dot
+            if len(trail) > 0:
+                cv2.circle(img, (trail[0][0], trail[0][1]), 2, _dim(color, 0.5), -1)
 
 
 def draw_hud(
@@ -217,8 +320,9 @@ def draw_hud(
     device: str = "cpu",
     stride: int = 1,
     degraded: bool = False,
+    modality: str = "STANDARD",
 ) -> None:
-    """Render a compact status strip along the bottom of the frame."""
+    """Render a compact status strip along the bottom of the frame with modality tag."""
     h, w = img.shape[:2]
     bar_h = 26
     top = h - bar_h
@@ -228,7 +332,13 @@ def draw_hud(
     live_color = C2_AMBER if degraded else C2_EMERALD
     cv2.circle(img, (14, top + bar_h // 2), 4, live_color, -1, cv2.LINE_AA)
 
-    left_text = f"{camera_id}   {display_fps:4.1f} FPS   TRACKS {track_count}"
+    mod_tag = "OPTICAL"
+    if modality == "IR_NIGHT":
+        mod_tag = "IR NIGHT"
+    elif modality == "THERMAL":
+        mod_tag = "THERMAL"
+
+    left_text = f"{camera_id} [{mod_tag}]   {display_fps:4.1f} FPS   TRACKS {track_count}"
     cv2.putText(img, left_text, (26, top + 18), _FONT, 0.46, C2_WHITE, 1, cv2.LINE_AA)
 
     right_bits: List[str] = [f"YOLOv8n {device.upper()}"]
@@ -249,6 +359,47 @@ def draw_offline(img: np.ndarray, camera_id: str, message: str) -> None:
                 _FONT, 0.48, C2_WHITE, 1, cv2.LINE_AA)
 
 
+def apply_privacy_masking(
+    img: np.ndarray,
+    tracks: Sequence[TrackedObject],
+    blur_kernel_size: int = 31,
+) -> None:
+    """
+    Apply Gaussian blur privacy masking to facial/head regions of human tracks.
+    Operates in-place on the frame buffer for statutory privacy compliance.
+    """
+    h_img, w_img = img.shape[:2]
+    if blur_kernel_size % 2 == 0:
+        blur_kernel_size += 1
+
+    for track in tracks:
+        if getattr(track, "object_class", "").lower() != "person":
+            continue
+        bbox = getattr(track, "bounding_box", None)
+        if not bbox or len(bbox) < 4:
+            continue
+
+        x1, y1, x2, y2 = map(int, bbox[:4])
+        x1 = max(0, min(x1, w_img - 1))
+        y1 = max(0, min(y1, h_img - 1))
+        x2 = max(0, min(x2, w_img))
+        y2 = max(0, min(y2, h_img))
+        pw = x2 - x1
+        ph = y2 - y1
+        if pw < 8 or ph < 12:
+            continue
+
+        # Mask the upper 30% of human bounding box (facial and cranial region)
+        head_bottom = min(h_img, y1 + max(8, int(ph * 0.30)))
+        head_roi = img[y1:head_bottom, x1:x2]
+        if head_roi.size > 0 and head_roi.shape[0] > 1 and head_roi.shape[1] > 1:
+            kx = min(blur_kernel_size, (head_roi.shape[1] // 2) * 2 - 1)
+            ky = min(blur_kernel_size, (head_roi.shape[0] // 2) * 2 - 1)
+            if kx >= 3 and ky >= 3:
+                blurred = cv2.GaussianBlur(head_roi, (kx, ky), 0)
+                img[y1:head_bottom, x1:x2] = blurred
+
+
 def annotate_frame(
     image: np.ndarray,
     tracks: Sequence[TrackedObject],
@@ -261,15 +412,19 @@ def annotate_frame(
     stride: int = 1,
     show_hud: bool = True,
     degraded: bool = False,
-    copy: bool = True,
+    copy: bool = False,
+    modality: str = "STANDARD",
+    privacy_masking: bool = False,
 ) -> np.ndarray:
     """
     Composite every overlay onto a frame and return the annotated image.
 
-    Draw order matters: zones sit underneath tracks so boxes stay readable, and
-    the HUD is painted last so nothing occludes it.
+    Draw order matters: optional privacy blurring and zones sit underneath tracks
+    so boxes stay readable, and the HUD is painted last so nothing occludes it.
     """
     canvas = image.copy() if copy else image
+    if privacy_masking:
+        apply_privacy_masking(canvas, tracks)
     draw_zones(canvas, zones, boundaries)
     draw_tracks(canvas, tracks)
     if show_hud:
@@ -282,13 +437,15 @@ def annotate_frame(
             device=device,
             stride=stride,
             degraded=degraded,
+            modality=modality,
         )
     return canvas
 
 
-def encode_jpeg(image: np.ndarray, quality: int = 78) -> Optional[bytes]:
-    """JPEG-encode a frame once for fan-out to all MJPEG clients."""
-    ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+def encode_jpeg(image: np.ndarray, quality: int = 70) -> Optional[bytes]:
+    """Fast JPEG encode a frame once for fan-out to all MJPEG clients."""
+    params = [cv2.IMWRITE_JPEG_QUALITY, int(quality), cv2.IMWRITE_JPEG_OPTIMIZE, 0]
+    ok, buf = cv2.imencode(".jpg", image, params)
     if not ok:
         return None
     return buf.tobytes()

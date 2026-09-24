@@ -48,19 +48,19 @@ class AuditLogger:
             "subtype": "admin_audit_log",
         }
 
-        from backend.incidents.models import EventLogModel
         from backend.database import get_session_factory
+        from backend.database.schema import Event
 
         factory = get_session_factory()
         async with factory() as session:
-            row = EventLogModel(
+            row = Event(
                 event_id=entry.audit_id,
                 event_type="SYSTEM",
                 timestamp=entry.timestamp,
                 camera_id="SYSTEM_CORE",
                 confidence=1.0,
                 source="system",
-                payload=json.dumps(payload_dict),
+                meta=payload_dict,
             )
             session.add(row)
             await session.commit()

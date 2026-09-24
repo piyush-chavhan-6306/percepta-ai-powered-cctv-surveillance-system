@@ -49,11 +49,11 @@ class ObjectDetector:
     def __init__(
         self,
         model_name: str = "yolov8n.pt",
-        conf_threshold: float = 0.25,
+        conf_threshold: float = 0.20,
         iou_threshold: float = 0.45,
         target_classes: Optional[Dict[int, str]] = None,
         device: str = "cpu",
-        imgsz: int = 640,
+        imgsz: Optional[int] = None,
         model_loader: Optional[ModelLoader] = None,
         event_store: Optional[EventStore] = None,
     ) -> None:
@@ -63,7 +63,11 @@ class ObjectDetector:
         self.target_classes = target_classes or DEFAULT_SURVEILLANCE_CLASSES
         self.target_class_ids = list(self.target_classes.keys())
         self.device = device
-        self.imgsz = imgsz
+        if imgsz is not None:
+            self.imgsz = imgsz
+        else:
+            from backend.config import get_settings
+            self.imgsz = get_settings().DEFAULT_INFERENCE_SIZE
         self.loader = model_loader or get_model_loader()
         self.event_store = event_store or get_event_store()
 
@@ -73,6 +77,12 @@ class ObjectDetector:
     def initialize(self) -> None:
         """Load and initialize model weights, then warm the inference graph."""
         if not self._is_initialized:
+            import torch
+            try:
+                if hasattr(torch.backends, "mkldnn"):
+                    torch.backends.mkldnn.enabled = True
+            except Exception:
+                pass
             self._model = self.loader.load_model(self.model_name, device=self.device)
             self._is_initialized = True
             logger.info(f"ObjectDetector initialized with {self.model_name} on {self.device} (imgsz={self.imgsz})")
@@ -124,19 +134,41 @@ class ObjectDetector:
         if h == 0 or w == 0:
             return []
 
-        import torch
+        # Detect whether we're running ONNX or PyTorch backend
+        model_str = str(getattr(self._model, "overrides", {}).get("model", "")) or str(getattr(self._model, "ckpt", ""))
+        is_onnx = "onnx" in model_str.lower() or str(getattr(self._model, "model_name", "")).endswith(".onnx")
+        run_imgsz = self.imgsz
 
-        # Run optimized YOLO inference with native class filtering and inference_mode
-        with torch.inference_mode():
-            results = self._model(
-                image,
-                conf=self.conf_threshold,
-                iou=self.iou_threshold,
-                classes=self.target_class_ids,
-                imgsz=self.imgsz,
-                verbose=False,
-                device=self.device,
+        try:
+            if is_onnx:
+                # ONNX Runtime handles its own optimization — no torch context needed
+                results = self._model(
+                    image,
+                    conf=self.conf_threshold,
+                    iou=self.iou_threshold,
+                    classes=self.target_class_ids,
+                    imgsz=run_imgsz,
+                    verbose=False,
+                )
+            else:
+                import torch
+                with torch.inference_mode():
+                    results = self._model(
+                        image,
+                        conf=self.conf_threshold,
+                        iou=self.iou_threshold,
+                        classes=self.target_class_ids,
+                        imgsz=self.imgsz,
+                        verbose=False,
+                        device=self.device,
+                    )
+        except Exception as exc:
+            logger.error(
+                f"[INFERENCE ERROR] ObjectDetector execution failure on {w}x{h} frame: {exc} "
+                f"(model={self.model_name}, backend={'ONNX' if is_onnx else 'PyTorch'}, device={self.device})",
+                exc_info=True,
             )
+            return []
 
         detections: List[DetectionResult] = []
 

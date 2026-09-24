@@ -1,0 +1,155 @@
+{
+  "dataset_profiles": [
+    {
+      "id": "bop_fixed_patrol",
+      "name": "Border Outpost (BOP) Fixed Perimeter CCTV",
+      "scenario": "Sashastra Seema Bal (SSB) Static Perimeter Surveillance",
+      "source_path": "dataset/surveillance/CCTV 01/VIRAT_S_000002.mp4",
+      "source_type": "video_file",
+      "fps": 30.0,
+      "modality": "STANDARD",
+      "recommended_zones": [
+        {
+          "name": "Outpost Buffer Zone",
+          "severity": "RESTRICTED",
+          "polygon": [[100, 150], [900, 150], [950, 650], [50, 650]]
+        },
+        {
+          "name": "Zero-Line Tripwire",
+          "severity": "CRITICAL",
+          "boundary": [[50, 400], [950, 400]]
+        }
+      ],
+      "description": "Continuous wide-angle CCTV surveillance over the perimeter security apron. Evaluates pedestrian tracking, vehicle movements, and loitering detection."
+    },
+    {
+      "id": "uav_aerial_patrol",
+      "name": "UAV Tactical Aerial Border Patrol",
+      "scenario": "Airborne Drone Reconnaissance over Undulating Border Terrain",
+      "source_path": "dataset/drone/VisDrone2019-MOT-val/sequences/uav0000086_00000_v",
+      "source_type": "image_sequence",
+      "fps": 25.0,
+      "modality": "STANDARD",
+      "recommended_zones": [
+        {
+          "name": "Aerial Recon Corridor",
+          "severity": "RESTRICTED",
+          "polygon": [[50, 50], [1200, 50], [1200, 700], [50, 700]]
+        }
+      ],
+      "description": "High-angle UAV thermal/optical drone sequence (VisDrone MOT benchmark). Evaluates multi-target aerial tracking under platform motion and small-object detection."
+    },
+    {
+      "id": "pedestrian_checkpoint",
+      "name": "International Border Checkpoint Corridor",
+      "scenario": "Pedestrian Ingress / Transit Corridor Monitoring",
+      "source_path": "dataset/perimeter/MOT17/train/MOT17-02-FRCNN/img1",
+      "source_type": "image_sequence",
+      "fps": 30.0,
+      "modality": "STANDARD",
+      "recommended_zones": [
+        {
+          "name": "Transit Channel",
+          "severity": "RESTRICTED",
+          "polygon": [[100, 200], [1800, 200], [1800, 1000], [100, 1000]]
+        }
+      ],
+      "description": "Ground-level pedestrian transit corridor (MOT17 benchmark). Tests heavy occlusion re-identification, non-biometric personnel analytics, and multi-camera handover."
+    },
+    {
+      "id": "tactical_incident_breach",
+      "name": "Tactical Vehicle Drop-off & Quick Breach",
+      "scenario": "Perimeter Vehicle Approach and Rapid Personnel Egress",
+      "source_path": "dataset/surveillance/CCTV 01/VIRAT_S_010001_03_000537_000563.mp4",
+      "source_type": "video_file",
+      "fps": 30.0,
+      "modality": "STANDARD",
+      "recommended_zones": [
+        {
+          "name": "Restricted Roadway Approach",
+          "severity": "RESTRICTED",
+          "polygon": [[50, 100], [600, 100], [600, 450], [50, 450]]
+        }
+      ],
+      "description": "High-priority tactical incident capture from VIRAT ground surveillance. Demonstrates real-time threat score escalation from RESTRICTED approach to CRITICAL perimeter violation."
+    },
+    {
+      "id": "night_ir_patrol",
+      "name": "Night IR Perimeter Patrol (Real Footage)",
+      "scenario": "Genuine IR night-vision CCTV surveillance of outdoor night scene",
+      "source_path": "dataset/surveillance/night_ir_patrol.mp4",
+      "source_type": "video_file",
+      "fps": 25.0,
+      "modality": "IR_NIGHT",
+      "verification_status": "VERIFIED-REAL",
+      "verification": {
+        "source": "Internet Archive youtube-GC2x8dwvi4M (X-Life IR CCTV DVR recording)",
+        "resolution": "320x240",
+        "duration_s": 12.44,
+        "size_mb": 2.84,
+        "measured": "1.09 detections/frame, mean conf 0.29 with IR_NIGHT preprocessing; real ByteTrack: 2 concurrent persons, 5 unique IDs over 12.4s, 238/250 frames with tracks",
+        "notes": "Genuine IR surveillance recording with timestamp overlay; NOT synthetic darkening."
+      },
+      "recommended_zones": [
+        {
+          "name": "Night Watch Corridor",
+          "severity": "RESTRICTED",
+          "polygon": [[20, 40], [300, 40], [300, 220], [20, 220]]
+        }
+      ],
+      "description": "Real IR night surveillance (not synthetic). Validates night ingestion, CLAHE preprocessing, person detection and tracking under genuine low-light IR imagery."
+    },
+    {
+      "id": "thermal_patrol",
+      "name": "Thermal Aerial Patrol (Real Footage)",
+      "scenario": "Genuine FLIR white-hot thermal surveillance of people and vehicles",
+      "source_path": "dataset/surveillance/thermal_patrol.mp4",
+      "source_type": "video_file",
+      "fps": 25.0,
+      "modality": "THERMAL",
+      "verification_status": "VERIFIED-REAL",
+      "verification": {
+        "source": "Internet Archive 2019FLIRPORNGOLETACA93117 (Bayraktar TB2 FLIR aerial surveillance)",
+        "resolution": "640x360",
+        "duration_s": 32.0,
+        "size_mb": 22.32,
+        "measured": "1.10 detections/frame, mean conf 0.29 with WHITE_HOT inference representation (real detector, real thermal footage)",
+        "notes": "Inference uses WHITE_HOT grayscale; operator display uses IRONBOW. NOT a dedicated thermal model - RGB COCO yolov8n, quality documented honestly."
+      },
+      "recommended_zones": [
+        {
+          "name": "Thermal Recon Zone",
+          "severity": "RESTRICTED",
+          "polygon": [[80, 40], [560, 40], [560, 320], [80, 320]]
+        }
+      ],
+      "description": "Real FLIR thermal footage (not synthetic). Validates thermal ingestion, WHITE_HOT inference path, separated IRONBOW operator rendering, and honest quality measurement of the RGB COCO model on thermal imagery."
+    },
+    {
+      "id": "anpr_vehicle_checkpoint",
+      "name": "ANPR Vehicle Checkpoint (Real Footage)",
+      "scenario": "Motorway traffic with clearly visible license plates for end-to-end ANPR validation",
+      "source_path": "dataset/surveillance/anpr_vehicle_checkpoint.mp4",
+      "source_type": "video_file",
+      "fps": 30.0,
+      "modality": "STANDARD",
+      "verification_status": "VERIFIED-REAL",
+      "verification": {
+        "source": "Internet Archive anpr_examples_202208 (4K motorway traffic, downscaled to 1080p)",
+        "resolution": "1920x1080",
+        "duration_s": 10.07,
+        "size_mb": 13.54,
+        "measured": "63/63 plate OCR reads accepted post-downscale, mean conf 0.818 (real plates: GXI5 OGJ, KH05 ZZK, WR02 FKD...)",
+        "notes": "Plates readable at 1080p; OCR consensus required per track. No fabricated plate numbers."
+      },
+      "recommended_zones": [
+        {
+          "name": "Vehicle Checkpoint Lane",
+          "severity": "RESTRICTED",
+          "polygon": [[200, 300], [1700, 300], [1700, 1050], [200, 1050]]
+        }
+      ],
+      "description": "Real vehicle footage with visible plates. Validates the complete ANPR chain: vehicle detection, tracking, plate detection inside vehicle box, crop, enhancement, OCR, temporal consensus, evidence package."
+    }
+  ]
+}

@@ -42,10 +42,15 @@ interface SurveillanceContextType {
   refreshMetrics: () => Promise<void>;
   refreshCoverage: () => Promise<void>;
   refreshAll: () => Promise<void>;
+  selectedCameraId: string | null;
+  setSelectedCameraId: (id: string | null) => void;
+  cameraPreviewUrls: Record<string, string>;
+  setCameraPreviewUrl: (cameraId: string, url: string) => void;
+  clearAllAlerts: () => Promise<void>;
   acknowledgeAlert: (alertId: string) => Promise<void>;
   acknowledgeIncident: (incidentId: string) => void;
   resolveIncident: (incidentId: string) => void;
-  registerCameraLocally: (camera: CameraRecord) => void;
+  registerCameraLocally: (camera: CameraRecord, previewUrl?: string) => void;
   deleteCameraLocally: (cameraId: string) => void;
   toggleCameraStatus: (cameraId: string) => void;
   applyProfile: (profileId: string) => Promise<void>;
@@ -56,6 +61,8 @@ const SurveillanceContext = createContext<SurveillanceContextType | undefined>(u
 
 export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [cameras, setCameras] = useState<CameraRecord[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
+  const [cameraPreviewUrls, setCameraPreviewUrls] = useState<Record<string, string>>({});
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [incidents, setIncidents] = useState<IncidentSummary[]>([]);
   const [threat, setThreat] = useState<ThreatAssessment | null>(null);
@@ -119,6 +126,7 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
       const res = await api.getCameras();
       if (res?.cameras) {
         setCameras(res.cameras);
+        setSelectedCameraId((cur) => cur || (res.cameras.length > 0 ? res.cameras[0].camera_id : null));
       }
     } catch (err: any) {
       console.warn("Could not load cameras from backend:", err.message);
@@ -226,12 +234,31 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     );
   }, []);
 
-  const registerCameraLocally = useCallback((camera: CameraRecord) => {
+  const registerCameraLocally = useCallback((camera: CameraRecord, previewUrl?: string) => {
     setCameras((prev) => {
       const filtered = prev.filter((c) => c.camera_id !== camera.camera_id);
       return [camera, ...filtered];
     });
+    setSelectedCameraId(camera.camera_id);
+    if (previewUrl) {
+      setCameraPreviewUrls((prev) => ({ ...prev, [camera.camera_id]: previewUrl }));
+    }
   }, []);
+
+  const setCameraPreviewUrl = useCallback((cameraId: string, url: string) => {
+    setCameraPreviewUrls((prev) => ({ ...prev, [cameraId]: url }));
+  }, []);
+
+  const clearAllAlerts = useCallback(async () => {
+    try {
+      await api.clearAlerts();
+    } catch {
+      // ignore
+    }
+    setAlerts([]);
+    // Refresh threat level immediately so meter resets
+    refreshThreat();
+  }, [refreshThreat]);
 
   const deleteCameraLocally = useCallback((cameraId: string) => {
     setCameras((prev) => prev.filter((c) => c.camera_id !== cameraId));
@@ -270,21 +297,29 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
     await refreshAll();
   }, [refreshAll]);
 
-  // Initial load
+  // Initial load & synchronized polling
   useEffect(() => {
     refreshAll();
     const timer = setInterval(() => {
       refreshCameras();
+      refreshAlerts();
+      refreshIncidents();
+      refreshThreat();
       refreshMetrics();
       refreshCoverage();
-    }, 4000);
+    }, 2500);
     return () => clearInterval(timer);
-  }, [refreshAll, refreshCameras, refreshMetrics, refreshCoverage]);
+  }, [refreshAll, refreshCameras, refreshAlerts, refreshIncidents, refreshThreat, refreshMetrics, refreshCoverage]);
 
   return (
     <SurveillanceContext.Provider
       value={{
         cameras,
+        selectedCameraId,
+        setSelectedCameraId,
+        cameraPreviewUrls,
+        setCameraPreviewUrl,
+        clearAllAlerts,
         alerts,
         incidents,
         threat,

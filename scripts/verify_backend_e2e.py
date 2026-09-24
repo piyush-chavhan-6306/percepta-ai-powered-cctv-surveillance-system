@@ -42,7 +42,7 @@ async def run_e2e_verification():
     manager = get_camera_manager()
 
     # 2. Setup Real CCTV Camera Feed
-    video_path = Path("VIRAT/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4")
+    video_path = Path("dataset/surveillance/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4")
     assert video_path.exists(), f"VIRAT video missing at {video_path}"
 
     camera_id = f"cctv_hardened_{int(time.time())}"

@@ -92,20 +92,19 @@ class MultiModalSensorManager:
         }
 
         # Persist event
-        from backend.incidents.models import EventLogModel
         from backend.database import get_session_factory
-        import json
+        from backend.database.schema import Event
 
         factory = get_session_factory()
         async with factory() as session:
-            row = EventLogModel(
+            row = Event(
                 event_id=str(event.event_id),
                 event_type="DETECTION",
                 timestamp=event.timestamp,
                 camera_id=f"SENSOR_{request.sensor_id}",
                 confidence=request.confidence,
                 source=src.value,
-                payload=json.dumps(payload_dict),
+                meta=payload_dict,
             )
             session.add(row)
             await session.commit()

@@ -93,3 +93,15 @@ def test_mjpeg_stream_nonexistent_camera_returns_404():
     client = TestClient(app)
     response = client.get("/api/stream/video/non_existent_cam_stream")
     assert response.status_code == 404
+
+
+def test_replay_endpoint_returns_valid_jpeg():
+    """Verify forensic replay seeking returns valid JPEG frame with telemetry."""
+    app = create_app()
+    client = TestClient(app)
+    response = client.get("/api/streaming/replay/CAM-01?timestamp=2026-09-09T14:30:00Z&offset_sec=-2.5")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.content.startswith(b"\xff\xd8")
+    assert len(response.content) > 500
+

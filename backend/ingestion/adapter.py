@@ -22,6 +22,7 @@ class FrameData:
     height: int = 480
     fps: float = 30.0
     source: SourceType = SourceType.VIDEO_FILE
+    modality: str = "STANDARD"  # "STANDARD", "IR_NIGHT", "THERMAL"
 
     @property
     def shape(self) -> tuple[int, int, int]:
@@ -31,9 +32,15 @@ class FrameData:
 class SensorAdapter(ABC):
     """Abstract interface for all video and sensor adapters."""
 
-    def __init__(self, camera_id: str, source: SourceType = SourceType.VIDEO_FILE) -> None:
+    def __init__(
+        self,
+        camera_id: str,
+        source: SourceType = SourceType.VIDEO_FILE,
+        modality: str = "STANDARD",
+    ) -> None:
         self.camera_id = camera_id
         self.source = source
+        self.modality = modality  # "STANDARD", "IR_NIGHT", "THERMAL"
         self._is_running = False
 
     @property
