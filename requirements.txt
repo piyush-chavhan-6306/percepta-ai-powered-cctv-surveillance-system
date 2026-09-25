@@ -26,3 +26,6 @@ slowapi>=0.1.9
 
 # Video upload (multipart form parsing for /api/cameras/upload)
 python-multipart>=0.0.9
+
+# Optional: Public tunnel for hybrid edge-cloud (ngrok)
+pyngrok>=7.0.0
