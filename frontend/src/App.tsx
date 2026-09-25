@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Routes, Route, Navigate, useSearchParams } from "react-router";
 import { SurveillanceProvider, useSurveillance } from "./store/surveillanceContext";
+import { EdgeProvider } from "./components/EdgeModeIndicator";
 import { Header } from "./components/Header";
 import { Navigation } from "./components/Navigation";
 import { AddCameraModal } from "./components/AddCameraModal";
@@ -110,9 +111,11 @@ export default function App() {
         path="/dashboard/*"
         element={
           <ProtectedRoute>
-            <SurveillanceProvider>
-              <CommandCenterLayout />
-            </SurveillanceProvider>
+            <EdgeProvider>
+              <SurveillanceProvider>
+                <CommandCenterLayout />
+              </SurveillanceProvider>
+            </EdgeProvider>
           </ProtectedRoute>
         }
       />

@@ -217,11 +217,11 @@ def create_app() -> FastAPI:
     # Attach Gateway Security & Telemetry Middleware
     app.add_middleware(GatewaySecurityMiddleware)
 
-    # CORS configuration for frontend dashboard
+    # CORS — allow Vercel and ngrok tunnel origins dynamically
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
-        allow_origin_regex=r"https://.*\.vercel\.app",
+        allow_origin_regex=r"(https://.*\.vercel\.app|https://.*\.ngrok-free\.app|https://.*\.ngrok\.io)",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -229,6 +229,34 @@ def create_app() -> FastAPI:
 
     # Register Gateway Auth Router
     app.include_router(auth_router)
+
+    # ── Edge Registration endpoint (allows the edge to announce its public URL) ──
+    import json as _json
+    from pathlib import Path as _Path
+    from fastapi import Body as _Body
+    from fastapi.responses import JSONResponse as _JSONResponse
+
+    _EDGE_STATE_FILE = _Path("runtime/edge_url.txt")
+
+    @app.post("/api/edge/register", tags=["Edge"])
+    async def register_edge_url(payload: dict = _Body(...)):
+        """Edge node posts its public tunnel URL here so the C2 can discover it."""
+        url = payload.get("url", "").strip()
+        if not url or not url.startswith("http"):
+            return _JSONResponse(status_code=400, content={"error": "Invalid edge URL"})
+        _EDGE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _EDGE_STATE_FILE.write_text(url)
+        logger.info(f"[EDGE-REGISTER] Edge URL registered: {url}")
+        return {"status": "ok", "edge_url": url}
+
+    @app.get("/api/edge/url", tags=["Edge"])
+    async def get_edge_url():
+        """Return the currently registered public edge URL."""
+        if _EDGE_STATE_FILE.exists():
+            url = _EDGE_STATE_FILE.read_text().strip()
+            if url:
+                return {"edge_url": url, "mode": "online"}
+        return {"edge_url": None, "mode": "local"}
 
     # Register Domain Routers
     app.include_router(health_router)

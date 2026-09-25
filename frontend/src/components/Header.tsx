@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { PerceptaLogo } from "./PerceptaLogo";
 import { useSurveillance } from "../store/surveillanceContext";
+import { EdgeModeBadge } from "./EdgeModeIndicator";
 
 interface HeaderProps {
   onRegisterFeed?: () => void;
@@ -178,8 +179,10 @@ export const Header: React.FC<HeaderProps> = ({ onRegisterFeed }) => {
         </div>
       </div>
 
-      {/* ── Right: Sensor/Audio Toggle + Add Camera + Refresh (Comfortable Tactical Sizing) ── */}
+      {/* ── Right: Edge Mode + Sensor/Audio Toggle + Add Camera + Refresh ── */}
       <div className="flex items-center gap-3 shrink-0">
+        {/* Edge Mode Indicator */}
+        <EdgeModeBadge />
         {/* Audio Toggle */}
         <button
           type="button"
