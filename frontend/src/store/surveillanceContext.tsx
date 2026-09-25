@@ -17,6 +17,42 @@ import type {
   SystemMetrics,
   ThreatAssessment,
 } from "../types/surveillance";
+import {
+  DEMO_CAMERAS,
+  DEMO_ALERTS,
+  DEMO_INCIDENTS,
+  DEMO_THREAT,
+  DEMO_METRICS,
+  DEMO_COVERAGE,
+} from "../lib/demoData";
+
+const DEFAULT_PREVIEW_URLS: Record<string, string> = {
+  "CAM-01": "/videos/cam01_person_border.mp4",
+  "CAM-02": "/videos/cam02_tracking.mp4",
+  "CAM-03": "/videos/cam03_vehicle.mp4",
+  "CAM-04": "/videos/cam04_night_ir.mp4",
+};
+
+const FALLBACK_ALERTS: AlertItem[] = DEMO_ALERTS.map((a) => ({
+  event_id: a.id,
+  timestamp: a.timestamp,
+  camera_id: a.cameraId,
+  track_id: a.trackId,
+  severity: a.severity as any,
+  message: a.message,
+  confidence: a.confidence,
+  is_acknowledged: a.acknowledged,
+}));
+
+const FALLBACK_INCIDENTS: IncidentSummary[] = DEMO_INCIDENTS.map((inc) => ({
+  incident_id: inc.id,
+  camera_id: inc.cameraId,
+  total_events: inc.factors.length,
+  first_seen: inc.firstSeen,
+  last_seen: inc.lastSeen,
+  status: inc.status,
+  severity: inc.severity,
+}));
 
 interface SurveillanceContextType {
   cameras: CameraRecord[];
@@ -60,14 +96,14 @@ interface SurveillanceContextType {
 const SurveillanceContext = createContext<SurveillanceContextType | undefined>(undefined);
 
 export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [cameras, setCameras] = useState<CameraRecord[]>([]);
-  const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
-  const [cameraPreviewUrls, setCameraPreviewUrls] = useState<Record<string, string>>({});
-  const [alerts, setAlerts] = useState<AlertItem[]>([]);
-  const [incidents, setIncidents] = useState<IncidentSummary[]>([]);
-  const [threat, setThreat] = useState<ThreatAssessment | null>(null);
-  const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
-  const [coverage, setCoverage] = useState<CoverageReport | null>(null);
+  const [cameras, setCameras] = useState<CameraRecord[]>(DEMO_CAMERAS.slice(0, 4));
+  const [selectedCameraId, setSelectedCameraId] = useState<string | null>("CAM-01");
+  const [cameraPreviewUrls, setCameraPreviewUrls] = useState<Record<string, string>>(DEFAULT_PREVIEW_URLS);
+  const [alerts, setAlerts] = useState<AlertItem[]>(FALLBACK_ALERTS);
+  const [incidents, setIncidents] = useState<IncidentSummary[]>(FALLBACK_INCIDENTS);
+  const [threat, setThreat] = useState<ThreatAssessment | null>(DEMO_THREAT);
+  const [metrics, setMetrics] = useState<SystemMetrics | null>(DEMO_METRICS);
+  const [coverage, setCoverage] = useState<CoverageReport | null>(DEMO_COVERAGE);
   const [activeProfile, setActiveProfile] = useState<OperationalProfile | null>(null);
   const [audioEnabled, setAudioEnabled] = useState<boolean>(false);
   const [activeView, setActiveView] = useState<string>("dashboard");
@@ -124,9 +160,9 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const refreshCameras = useCallback(async () => {
     try {
       const res = await api.getCameras();
-      if (res?.cameras) {
+      if (res?.cameras && res.cameras.length > 0) {
         setCameras(res.cameras);
-        setSelectedCameraId((cur) => cur || (res.cameras.length > 0 ? res.cameras[0].camera_id : null));
+        setSelectedCameraId((cur) => cur || res.cameras[0].camera_id);
       }
     } catch (err: any) {
       console.warn("Could not load cameras from backend:", err.message);
@@ -136,7 +172,7 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const refreshAlerts = useCallback(async () => {
     try {
       const res = await api.getAlerts({ limit: 50 });
-      if (res?.alerts) {
+      if (res?.alerts && res.alerts.length > 0) {
         setAlerts(res.alerts);
       }
     } catch (err: any) {
@@ -147,7 +183,7 @@ export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const refreshIncidents = useCallback(async () => {
     try {
       const res = await api.getIncidents({ limit: 30 });
-      if (res?.incidents) {
+      if (res?.incidents && res.incidents.length > 0) {
         setIncidents(res.incidents);
       }
     } catch (err: any) {

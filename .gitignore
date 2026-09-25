@@ -64,3 +64,6 @@ Ultralytics/
 *.jpeg
 *.mp3
 !frontend/public/**
+
+.vercel
+.env*

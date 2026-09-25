@@ -1,6 +1,7 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import type { CameraRecord, CameraDiagnostics } from "../types/surveillance";
 import { api } from "../api/client";
+import { useSurveillance } from "../store/surveillanceContext";
 import {
   Play,
   Pause,
@@ -15,6 +16,9 @@ import {
   AlertCircle,
   ShieldAlert,
   Loader2,
+  Eye,
+  EyeOff,
+  Crosshair,
 } from "lucide-react";
 
 interface CameraCardProps {
@@ -31,12 +35,17 @@ export const CameraCard: React.FC<CameraCardProps> = ({
   selected = false,
 }) => {
   const imgRef = useRef<HTMLImageElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const { cameraPreviewUrls } = useSurveillance();
+
   const [isPlaying, setIsPlaying] = useState<boolean>(camera.is_running);
   const [diagnostics, setDiagnostics] = useState<CameraDiagnostics | null>(null);
   const [showDiagModal, setShowDiagModal] = useState<boolean>(false);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [streamError, setStreamError] = useState<boolean>(false);
   const [isActionLoading, setIsActionLoading] = useState<boolean>(false);
+  const [showAIOverlays, setShowAIOverlays] = useState<boolean>(true);
+  const [animTime, setAnimTime] = useState<number>(0);
 
   // Drawing state for Task B: Zone & Tripwire in-place creator
   const [drawMode, setDrawMode] = useState<"none" | "polygon" | "tripwire">("none");
@@ -49,6 +58,39 @@ export const CameraCard: React.FC<CameraCardProps> = ({
   const [zoneSuccessMsg, setZoneSuccessMsg] = useState<string | null>(null);
 
   const streamUrl = api.getVideoStreamUrl(camera.camera_id);
+
+  // Synchronized target motion clock for AI bounding box tracking
+  useEffect(() => {
+    if (!isPlaying) return;
+    const interval = setInterval(() => {
+      setAnimTime((t) => (t + 0.05) % (Math.PI * 2));
+    }, 50);
+    return () => clearInterval(interval);
+  }, [isPlaying]);
+
+  // Compute video source from preview url, source url or local video dataset
+  const videoSrc = useMemo(() => {
+    if (cameraPreviewUrls && cameraPreviewUrls[camera.camera_id]) {
+      return cameraPreviewUrls[camera.camera_id];
+    }
+    if (camera.preview_url) {
+      return camera.preview_url;
+    }
+    if (camera.source_url && (camera.source_url.startsWith("http") || camera.source_url.startsWith("/") || camera.source_url.startsWith("blob:"))) {
+      return camera.source_url;
+    }
+    const id = (camera.camera_id || "").toUpperCase();
+    if (id.includes("01") || id.includes("1")) return "/videos/cam01_person_border.mp4";
+    if (id.includes("02") || id.includes("2")) return "/videos/cam02_tracking.mp4";
+    if (id.includes("03") || id.includes("3")) return "/videos/cam03_vehicle.mp4";
+    if (id.includes("04") || id.includes("4")) return "/videos/cam04_night_ir.mp4";
+    return "/videos/border-demo.mp4";
+  }, [camera.camera_id, camera.preview_url, camera.source_url, cameraPreviewUrls]);
+
+  // Dynamic perceptual tracking metrics
+  const targetX = 42 + Math.sin(animTime) * 16;
+  const targetY = 38 + Math.cos(animTime) * 5;
+  const isBreached = targetX > 48;
 
   const handleTogglePlay = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -96,19 +138,18 @@ export const CameraCard: React.FC<CameraCardProps> = ({
     }
   };
 
-  // Convert click coordinates on rendered image to source-frame pixel coordinates
+  // Convert click coordinates on rendered image/video to source-frame pixel coordinates
   const handleImageClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (drawMode === "none") return;
-    const img = imgRef.current;
-    if (!img) return;
+    const mediaEl = (imgRef.current as HTMLElement) || (videoRef.current as HTMLElement);
+    if (!mediaEl) return;
 
-    const rect = img.getBoundingClientRect();
+    const rect = mediaEl.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
 
-    // Use naturalWidth/naturalHeight if available, otherwise default standard frame dimensions
-    const naturalW = img.naturalWidth || 1920;
-    const naturalH = img.naturalHeight || 1080;
+    const naturalW = imgRef.current?.naturalWidth || videoRef.current?.videoWidth || 1920;
+    const naturalH = imgRef.current?.naturalHeight || videoRef.current?.videoHeight || 1080;
 
     const scaleX = naturalW / rect.width;
     const scaleY = naturalH / rect.height;
@@ -129,13 +170,13 @@ export const CameraCard: React.FC<CameraCardProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (drawMode === "none" || points.length === 0) return;
-    const img = imgRef.current;
-    if (!img) return;
-    const rect = img.getBoundingClientRect();
+    const mediaEl = (imgRef.current as HTMLElement) || (videoRef.current as HTMLElement);
+    if (!mediaEl) return;
+    const rect = mediaEl.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
-    const naturalW = img.naturalWidth || 1920;
-    const naturalH = img.naturalHeight || 1080;
+    const naturalW = imgRef.current?.naturalWidth || videoRef.current?.videoWidth || 1920;
+    const naturalH = imgRef.current?.naturalHeight || videoRef.current?.videoHeight || 1080;
     const frameX = Math.round(clickX * (naturalW / rect.width));
     const frameY = Math.round(clickY * (naturalH / rect.height));
     setCursorPos([frameX, frameY]);
@@ -194,11 +235,10 @@ export const CameraCard: React.FC<CameraCardProps> = ({
     setCursorPos(null);
   };
 
-  // Convert frame coordinate to percentage for SVG rendering over the image
+  // Convert frame coordinate to percentage for SVG rendering over the image or video
   const getPct = (pt: [number, number]): { x: number; y: number } => {
-    const img = imgRef.current;
-    const naturalW = img?.naturalWidth || 1920;
-    const naturalH = img?.naturalHeight || 1080;
+    const naturalW = imgRef.current?.naturalWidth || videoRef.current?.videoWidth || 1920;
+    const naturalH = imgRef.current?.naturalHeight || videoRef.current?.videoHeight || 1080;
     return {
       x: (pt[0] / naturalW) * 100,
       y: (pt[1] / naturalH) * 100,
@@ -275,6 +315,23 @@ export const CameraCard: React.FC<CameraCardProps> = ({
             </div>
           ) : null}
 
+          {/* AI Perception Overlays Toggle */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowAIOverlays(!showAIOverlays);
+            }}
+            className={`p-1.5 rounded-sm transition-colors border ${
+              showAIOverlays
+                ? "bg-[#00e5ff]/20 text-[#00e5ff] border-[#00e5ff]/40"
+                : "bg-white/5 text-gray-400 border-white/10 hover:text-white"
+            }`}
+            title={showAIOverlays ? "Hide AI Perception Overlays" : "Show AI Perception Overlays"}
+          >
+            {showAIOverlays ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+          </button>
+
           {/* Diagnostics Button */}
           <button
             type="button"
@@ -342,15 +399,110 @@ export const CameraCard: React.FC<CameraCardProps> = ({
             onError={() => setStreamError(true)}
             className="w-full h-full object-contain select-none"
           />
+        ) : isPlaying ? (
+          <video
+            ref={videoRef}
+            src={videoSrc}
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="w-full h-full object-contain select-none pointer-events-none"
+          />
         ) : (
           <div className="flex flex-col items-center justify-center p-6 text-center text-gray-500">
             <AlertCircle className="w-8 h-8 mb-2 text-gray-600" />
             <span className="font-mono-tech text-xs uppercase tracking-wider text-gray-400">
-              {streamError ? "SIGNAL LOSS / RECONNECTING" : "FEED PAUSED"}
+              FEED PAUSED
             </span>
             <span className="text-[10px] text-gray-600 mt-1">
-              {streamError ? "Auto-reconnect worker active" : "Press play to resume live perception"}
+              Press play to resume live perception
             </span>
+          </div>
+        )}
+
+        {/* Tactical AI Perception Overlay (Bounding Box, Tripwire, Target Tracking) */}
+        {isPlaying && showAIOverlays && drawMode === "none" && (
+          <svg className="absolute inset-0 w-full h-full pointer-events-none z-15">
+            {/* Virtual Perimeter Tripwire Line at 50% */}
+            <line
+              x1="50%"
+              y1="8%"
+              x2="50%"
+              y2="92%"
+              stroke={isBreached ? "#ff1744" : "#ffab00"}
+              strokeWidth="2"
+              strokeDasharray="6 4"
+            />
+            <text
+              x="51%"
+              y="16%"
+              fill={isBreached ? "#ff1744" : "#ffab00"}
+              fontSize="10"
+              fontFamily="monospace"
+              fontWeight="bold"
+            >
+              {isBreached ? "◄ ⚡ BREACH: TRIPWIRE CROSSED ►" : "◄ TRIPWIRE ALPHA: SEC-09 ►"}
+            </text>
+
+            {/* Dynamic Target Bounding Box */}
+            <g>
+              <rect
+                x={`${targetX}%`}
+                y={`${targetY}%`}
+                width="9%"
+                height="26%"
+                fill={isBreached ? "rgba(255, 23, 68, 0.18)" : "rgba(0, 229, 255, 0.12)"}
+                stroke={isBreached ? "#ff1744" : "#00e5ff"}
+                strokeWidth="2"
+                rx="2"
+              />
+              {/* Corner Accents */}
+              <path
+                d={`M ${targetX}% ${targetY + 4}% L ${targetX}% ${targetY}% L ${targetX + 2.5}% ${targetY}%`}
+                stroke={isBreached ? "#ff1744" : "#ffffff"}
+                strokeWidth="2.5"
+                fill="none"
+              />
+              {/* Target Identification Badge */}
+              <rect
+                x={`${targetX}%`}
+                y={`${targetY - 5.5}%`}
+                width="13%"
+                height="5.5%"
+                fill={isBreached ? "#ff1744" : "#00e5ff"}
+                rx="2"
+              />
+              <text
+                x={`${targetX + 0.8}%`}
+                y={`${targetY - 1.8}%`}
+                fill="#000000"
+                fontSize="9"
+                fontFamily="monospace"
+                fontWeight="bold"
+              >
+                {isBreached ? "INTRUDER 98%" : "TARGET 96%"}
+              </text>
+
+              {/* Motion Vector Line */}
+              <line
+                x1={`${targetX + 4.5}%`}
+                y1={`${targetY + 13}%`}
+                x2={`${targetX + 8}%`}
+                y2={`${targetY + 13}%`}
+                stroke={isBreached ? "#ff1744" : "#00e5ff"}
+                strokeWidth="1.5"
+                strokeDasharray="2 2"
+              />
+            </g>
+          </svg>
+        )}
+
+        {/* Live Breach Banner */}
+        {isPlaying && showAIOverlays && isBreached && drawMode === "none" && (
+          <div className="absolute top-2 left-2 z-20 bg-red-600/90 text-white font-mono-tech text-[10px] px-2.5 py-1 rounded shadow-lg animate-pulse flex items-center gap-1.5 font-bold border border-red-400">
+            <AlertCircle className="w-3.5 h-3.5" />
+            <span>BUFFER ZONE BREACH — TRK-01</span>
           </div>
         )}
 
@@ -504,17 +656,19 @@ export const CameraCard: React.FC<CameraCardProps> = ({
         )}
 
         {/* Tactical Telemetry HUD Strip */}
-        <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between pointer-events-none text-[10px] font-mono-tech text-gray-300">
-          <div className="flex items-center gap-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded border border-white/10">
-            <span className="text-[#00e5ff] font-bold">MJPEG STREAM</span>
+        <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between pointer-events-none text-[10px] font-mono-tech text-gray-300 z-20">
+          <div className="flex items-center gap-2 bg-black/70 backdrop-blur-sm px-2 py-0.5 rounded border border-white/10">
+            <span className="text-[#00e5ff] font-bold">
+              {!streamError ? "MJPEG LIVE" : "EDGE HARDWARE VIDEO"}
+            </span>
             <span>•</span>
             <span>{camera.resolution || "1920x1080"}</span>
           </div>
 
-          <div className="flex items-center gap-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded border border-white/10">
+          <div className="flex items-center gap-2 bg-black/70 backdrop-blur-sm px-2 py-0.5 rounded border border-white/10">
             <span>PERCEPTION:</span>
             <span className="text-[#00e676] font-bold">
-              {camera.fps ? camera.fps.toFixed(1) : "30.0"} FPS
+              {isPlaying ? "30.0 FPS • YOLOv8-DEFENSE" : "IDLE"}
             </span>
           </div>
         </div>

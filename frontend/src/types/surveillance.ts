@@ -23,6 +23,8 @@ export interface CameraRecord {
   last_seen: string | null;
   is_running: boolean;
   modality?: string;
+  preview_url?: string;
+  source_url?: string;
   last_error?: string | null;
   codec?: string | null;
   duration_sec?: number | null;

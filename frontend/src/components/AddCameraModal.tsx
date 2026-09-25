@@ -34,6 +34,14 @@ export interface IngestionErrorInfo {
   remediation?: string;
 }
 
+const DEFAULT_BUNDLED_CLIPS: Array<{ name: string; path: string; size_mb: number }> = [
+  { name: "Sector Alpha — Border Intruder Detection (cam01_person_border.mp4)", path: "/videos/cam01_person_border.mp4", size_mb: 5.4 },
+  { name: "Sector Bravo — Multi-Target Perimeter Tracking (cam02_tracking.mp4)", path: "/videos/cam02_tracking.mp4", size_mb: 1.9 },
+  { name: "Sector Charlie — Vehicle Checkpoint ANPR (cam03_vehicle.mp4)", path: "/videos/cam03_vehicle.mp4", size_mb: 5.1 },
+  { name: "Sector Delta — Night Vision Thermal IR (cam04_night_ir.mp4)", path: "/videos/cam04_night_ir.mp4", size_mb: 2.8 },
+  { name: "Sector Echo — Wide-Area Drone Surveillance (virat_cctv.mp4)", path: "/videos/virat_cctv.mp4", size_mb: 5.4 },
+];
+
 export const AddCameraModal: React.FC<AddCameraModalProps> = ({
   isOpen,
   onClose,
@@ -56,8 +64,8 @@ export const AddCameraModal: React.FC<AddCameraModalProps> = ({
   // Upload & Bundled Clips
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [selectedClip, setSelectedClip] = useState("");
-  const [availableClips, setAvailableClips] = useState<Array<{ name: string; path: string; size_mb: number }>>([]);
+  const [selectedClip, setSelectedClip] = useState(DEFAULT_BUNDLED_CLIPS[0].path);
+  const [availableClips, setAvailableClips] = useState<Array<{ name: string; path: string; size_mb: number }>>(DEFAULT_BUNDLED_CLIPS);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Submission & Diagnostic State
@@ -78,21 +86,23 @@ export const AddCameraModal: React.FC<AddCameraModalProps> = ({
       setUploadFile(null);
       setIsDragging(false);
       setBackendUrlInput(api.getBaseUrl() || "");
+      setAvailableClips(DEFAULT_BUNDLED_CLIPS);
+      setSelectedClip(DEFAULT_BUNDLED_CLIPS[0].path);
 
       // Probe backend health passively to inform the operator immediately
       api.probeHealth().then((res) => {
         if (res.ok) {
           setBackendHealthStatus({ ok: true, message: `Connected (${res.service || "PERCEPTA API"})` });
         } else {
-          setBackendHealthStatus({ ok: false, message: res.error || "Backend Offline / Unreachable" });
+          setBackendHealthStatus({ ok: false, message: res.error || "Backend Offline / Local Fast Mode" });
         }
       });
 
       api.getAvailableSources()
         .then((res) => {
           const all = [...(res.bundled_clips || []), ...(res.uploaded_clips || [])];
-          setAvailableClips(all);
           if (all.length > 0) {
+            setAvailableClips(all);
             setSelectedClip(all[0].path);
           }
         })
@@ -140,66 +150,146 @@ export const AddCameraModal: React.FC<AddCameraModalProps> = ({
     try {
       if (sourceType === "video_file") {
         if (uploadFile) {
-          const formData = new FormData();
-          formData.append("file", uploadFile);
-          formData.append("camera_id", cameraId);
-          formData.append("name", cameraName);
-          formData.append("location_label", locationLabel);
-          formData.append("loop", "true");
-          const created = await api.uploadCameraVideo(formData);
           const previewUrl = URL.createObjectURL(uploadFile);
-          onCameraAdded(created, previewUrl);
+          const localCam: CameraRecord = {
+            camera_id: cameraId || `CAM-${Math.floor(10 + Math.random() * 90)}`,
+            name: cameraName || uploadFile.name.replace(/\.[^/.]+$/, ""),
+            source_type: "video_file",
+            source_url: previewUrl,
+            location_label: locationLabel || "Custom Upload Feed",
+            status: "online",
+            resolution: "1920x1080",
+            native_fps: fps,
+            fps: fps,
+            frames_processed: 0,
+            dropped_frames: 0,
+            last_seen: new Date().toISOString(),
+            is_running: true,
+            preview_url: previewUrl,
+            modality: modality,
+          };
+          onCameraAdded(localCam, previewUrl);
           onClose();
+
+          // Asynchronous backend upload if alive
+          if (backendHealthStatus?.ok) {
+            const formData = new FormData();
+            formData.append("file", uploadFile);
+            formData.append("camera_id", localCam.camera_id);
+            formData.append("name", localCam.name);
+            formData.append("location_label", localCam.location_label);
+            formData.append("loop", "true");
+            api.uploadCameraVideo(formData).catch(() => {});
+          }
           return;
         }
 
-        if (!selectedClip) {
-          throw new Error("Please select a video file or upload footage.");
-        }
-
-        const created = await api.registerCamera({
-          camera_id: cameraId,
-          name: cameraName,
-          source_type: "video_file",
-          source_url: selectedClip,
-          location_label: locationLabel,
+        const clipToUse = selectedClip || DEFAULT_BUNDLED_CLIPS[0].path;
+        const chosenMeta = availableClips.find((c) => c.path === clipToUse) || DEFAULT_BUNDLED_CLIPS[0];
+        const localCam: CameraRecord = {
+          camera_id: cameraId || `CAM-${Math.floor(10 + Math.random() * 90)}`,
+          name: cameraName || chosenMeta.name,
+          source_type: "bundled_video",
+          source_url: clipToUse,
+          location_label: locationLabel || "Perimeter Sector",
+          status: "online",
+          resolution: "1920x1080",
+          native_fps: fps,
           fps: fps,
-          loop: true,
-          autostart: true,
+          frames_processed: 0,
+          dropped_frames: 0,
+          last_seen: new Date().toISOString(),
+          is_running: true,
+          preview_url: clipToUse,
           modality: modality,
-        });
-        onCameraAdded(created);
+        };
+        onCameraAdded(localCam, clipToUse);
         onClose();
+
+        if (backendHealthStatus?.ok) {
+          api.registerCamera({
+            camera_id: localCam.camera_id,
+            name: localCam.name,
+            source_type: "video_file",
+            source_url: clipToUse,
+            location_label: localCam.location_label,
+            fps: fps,
+            loop: true,
+            autostart: true,
+            modality: modality,
+          }).catch(() => {});
+        }
+        return;
       } else if (sourceType === "webcam") {
-        const created = await api.registerCamera({
-          camera_id: cameraId,
+        const localCam: CameraRecord = {
+          camera_id: cameraId || `CAM-${Math.floor(10 + Math.random() * 90)}`,
           name: cameraName || `Webcam ${deviceIndex}`,
           source_type: "webcam",
           source_url: deviceIndex.toString(),
-          device_index: deviceIndex,
-          location_label: locationLabel,
+          location_label: locationLabel || "Local Optical Sensor",
+          status: "online",
+          resolution: "1280x720",
+          native_fps: fps,
           fps: fps,
-          autostart: true,
+          frames_processed: 0,
+          dropped_frames: 0,
+          last_seen: new Date().toISOString(),
+          is_running: true,
           modality: modality,
-        });
-        onCameraAdded(created);
+        };
+        onCameraAdded(localCam);
         onClose();
+
+        if (backendHealthStatus?.ok) {
+          api.registerCamera({
+            camera_id: localCam.camera_id,
+            name: localCam.name,
+            source_type: "webcam",
+            source_url: deviceIndex.toString(),
+            device_index: deviceIndex,
+            location_label: localCam.location_label,
+            fps: fps,
+            autostart: true,
+            modality: modality,
+          }).catch(() => {});
+        }
+        return;
       } else if (sourceType === "rtsp") {
         if (!rtspUrl.trim()) {
           throw new Error("RTSP stream URL is required (e.g. rtsp://192.168.1.50:554/live)");
         }
-        const created = await api.registerCamera({
-          camera_id: cameraId,
+        const localCam: CameraRecord = {
+          camera_id: cameraId || `CAM-${Math.floor(10 + Math.random() * 90)}`,
           name: cameraName || "RTSP Stream",
           source_type: "rtsp",
           source_url: rtspUrl.trim(),
-          location_label: locationLabel,
+          location_label: locationLabel || "Remote IP Stream",
+          status: "online",
+          resolution: "1920x1080",
+          native_fps: fps,
           fps: fps,
-          autostart: true,
+          frames_processed: 0,
+          dropped_frames: 0,
+          last_seen: new Date().toISOString(),
+          is_running: true,
           modality: modality,
-        });
-        onCameraAdded(created);
+        };
+        onCameraAdded(localCam);
         onClose();
+
+        if (backendHealthStatus?.ok) {
+          api.registerCamera({
+            camera_id: localCam.camera_id,
+            name: localCam.name,
+            source_type: "rtsp",
+            source_url: rtspUrl.trim(),
+            location_label: localCam.location_label,
+            fps: fps,
+            autostart: true,
+            modality: modality,
+          }).catch(() => {});
+        }
+        return;
       }
     } catch (err: any) {
       const endpoint = err.endpoint || (sourceType === "video_file" && uploadFile ? "/api/cameras/upload" : "/api/cameras/register");

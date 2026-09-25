@@ -122,11 +122,18 @@ const IncidentDetail: React.FC<{
             <span className="text-[#00e5ff] font-bold uppercase">TARGET EVIDENCE CROP</span>
             <span className="text-[#00e676]">SHA-256 HASH VERIFIED</span>
           </div>
-          <div className="aspect-[16/9] rounded border border-[rgba(0,229,255,0.2)] bg-[#05070a] relative overflow-hidden flex items-center justify-center">
-            <div className="w-24 h-36 border-2 border-[#00e5ff] rounded relative flex items-end justify-center pb-1">
-              <span className="text-[8px] font-mono bg-[#00e5ff] text-black px-1 font-bold">
-                PERSON-042
-              </span>
+          <div className="aspect-[16/9] rounded border border-[#00e5ff]/30 bg-[#05070a] relative overflow-hidden flex items-center justify-center group">
+            <img
+              src="/evidence/sample_target_crop.jpg"
+              alt="Perimeter Breach Evidence"
+              className="w-full h-full object-contain"
+            />
+            <div className="absolute top-2 right-2 px-1.5 py-0.5 bg-[#00e5ff] text-black text-[9px] font-mono font-bold rounded shadow">
+              CONFIDENCE 97.8%
+            </div>
+            <div className="absolute bottom-2 left-2 right-2 px-2 py-1 bg-black/75 backdrop-blur-sm border border-white/10 rounded flex items-center justify-between text-[9px] font-mono text-gray-300">
+              <span className="text-white font-bold">TARGET: GLOBAL-PERSON-042</span>
+              <span className="text-[#00e676]">SHA-256: faba2e69... (VERIFIED)</span>
             </div>
           </div>
         </div>

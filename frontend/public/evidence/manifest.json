@@ -1,0 +1,50 @@
+[
+  {
+    "evidence_id": "EV-FACE-0183",
+    "evidence_type": "face",
+    "title": "BIOMETRIC FACIAL OBSERVATION",
+    "file_name": "sample_face_crop.jpg",
+    "url": "/evidence/sample_face_crop.jpg",
+    "sha256_hash": "26c5b96c67d19d70e554554e0fc3eef5fbf5e3a2336cd6716e98cc5e5c2d35ef",
+    "camera_id": "CAM-01",
+    "confidence": 0.942,
+    "quality": 0.88,
+    "reason": "Facial recognition match against watchlist Sector Alpha"
+  },
+  {
+    "evidence_id": "EV-ANPR-1750",
+    "evidence_type": "anpr",
+    "title": "AUTOMATIC NUMBER PLATE RECOGNITION (ANPR)",
+    "file_name": "sample_anpr_crop.jpg",
+    "url": "/evidence/sample_anpr_crop.jpg",
+    "sha256_hash": "ecec52d8426fcbc69d72b75d27b73f06f7e66a95a0532eba6edde0640054fb34",
+    "camera_id": "CAM-03",
+    "confidence": 0.965,
+    "quality": 0.92,
+    "reason": "High-velocity vehicle license plate extraction"
+  },
+  {
+    "evidence_id": "EV-TGT-0042",
+    "evidence_type": "target",
+    "title": "PERIMETER BREACH TARGET ISOLATION",
+    "file_name": "sample_target_crop.jpg",
+    "url": "/evidence/sample_target_crop.jpg",
+    "sha256_hash": "faba2e69e361a701d9f12f73d5b6b74f362ce16769ce0f6caf0b35a0bf3c43c9",
+    "camera_id": "CAM-01",
+    "confidence": 0.978,
+    "quality": 0.95,
+    "reason": "Restricted border buffer zone infraction"
+  },
+  {
+    "evidence_id": "EV-WPN-0007",
+    "evidence_type": "weapon",
+    "title": "TACTICAL WEAPON DETECTION",
+    "file_name": "sample_weapon_crop.jpg",
+    "url": "/evidence/sample_weapon_crop.jpg",
+    "sha256_hash": "9e60201047cbdc8b06b605b27e238d464c02672d1fc2f3b7e6fd115e5374f599",
+    "camera_id": "CAM-02",
+    "confidence": 0.931,
+    "quality": 0.91,
+    "reason": "Concealed firearm / long-barrel weapon detection"
+  }
+]
