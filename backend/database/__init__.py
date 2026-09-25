@@ -47,6 +47,7 @@ from backend.database.schema import (  # noqa: E402
     ThreatAssessment,
     WeaponObservation,
     Zone,
+    SyncOutbox,
 )
 
 # ─────────────────────────────────────────────
@@ -68,19 +69,25 @@ async def init_db(database_url: str | None = None) -> AsyncEngine:
     settings = get_settings()
     db_url = database_url or settings.DATABASE_URL
 
-    _engine = create_async_engine(
-        db_url,
-        echo=False,
-        future=True,
-        pool_size=25,
-        max_overflow=50,
-        pool_timeout=60.0,
-    )
+    is_sqlite = "sqlite" in db_url.lower()
+    engine_kwargs: dict = {"echo": False, "future": True}
+    if not is_sqlite or ":memory:" not in db_url.lower():
+        engine_kwargs.update({
+            "pool_size": 30,
+            "max_overflow": 50,
+            "pool_timeout": 60.0,
+        })
+
+    _engine = create_async_engine(db_url, **engine_kwargs)
 
     async with _engine.begin() as conn:
-        await conn.execute(text("PRAGMA journal_mode=WAL;"))
-        await conn.execute(text("PRAGMA busy_timeout=5000;"))
-        await conn.execute(text("PRAGMA synchronous=NORMAL;"))
+        if is_sqlite:
+            try:
+                await conn.execute(text("PRAGMA journal_mode=WAL;"))
+                await conn.execute(text("PRAGMA busy_timeout=5000;"))
+                await conn.execute(text("PRAGMA synchronous=NORMAL;"))
+            except Exception:
+                pass
         await conn.run_sync(Base.metadata.create_all)
 
     _async_session_factory = async_sessionmaker(
@@ -144,6 +151,7 @@ __all__ = [
     "ThreatAssessment",
     "WeaponObservation",
     "Zone",
+    "SyncOutbox",
     # Legacy
     "EventLogModel",
     # Engine/session management

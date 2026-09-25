@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+tone_instructions: "You are an elite senior security engineer and frontend architect reviewing the Percepta border defense platform. Prioritize zero-trust security, real-time performance, clean responsive design, strict TypeScript typing, and defensive UI resilience."
+
+early_access: false
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+      - "master"
+  tools:
+    shellcheck:
+      enabled: true
+    ruff:
+      enabled: true
+    eslint:
+      enabled: true
+    gitleaks:
+      enabled: true
+
+path_filters:
+  - "!**/node_modules/**"
+  - "!**/.git/**"
+  - "!**/dist/**"
+  - "!**/build/**"
+  - "!**/*.min.*"
+
+rules:
+  - id: "security-zero-trust"
+    pattern: "**/*.{ts,tsx,py,js}"
+    message: "Ensure zero unauthenticated endpoints and sanitize all telemetry inputs."
+  - id: "tactical-hud-no-globe"
+    pattern: "frontend/src/views/DashboardView.tsx"
+    message: "Command Center HUD must remain focused, high FPS, and strictly free of 3D Earth globe renderers."
+  - id: "audio-autoplay-safety"
+    pattern: "frontend/src/pages/Landing.tsx"
+    message: "Landing page must not trigger unprompted background audio playback."
+
+chat:
+  auto_reply: true

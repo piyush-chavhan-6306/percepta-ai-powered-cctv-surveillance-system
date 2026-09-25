@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Demo scenario configuration.
  *
  * Edit the `time` values below to match your video content.
@@ -59,4 +59,4 @@ export const DEMO_SCENARIO: ScenarioEvent[] = [
 
 export const DEMO_CAMERA_ID   = "CAM-01";
 export const DEMO_LOCATION    = "SECTOR A — BORDER PERIMETER";
-export const DEMO_VIDEO_PATH  = "/videos/border-demo.mp4";
+export const DEMO_VIDEO_PATH  = "/videos/virat_cctv.mp4";

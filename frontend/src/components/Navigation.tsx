@@ -7,7 +7,6 @@ import {
   Layers,
   Brain,
   FileCheck,
-  Globe,
   Radio,
   Activity,
 } from "lucide-react";
@@ -79,13 +78,6 @@ export const Navigation: React.FC = () => {
       </div>
 
       <div className="flex items-center gap-3">
-        <button
-          onClick={() => navigate("/")}
-          className="flex items-center gap-1.5 px-3 py-1 rounded-lg border border-white/15 bg-white/5 text-[#d6c19b] hover:text-white hover:border-[#d6c19b]/50 text-[10px] font-mono tracking-wider transition-all cursor-pointer"
-        >
-          <Globe className="w-3 h-3 text-[#9ee7df]" />
-          <span>RECON BRIEFING (3D)</span>
-        </button>
         <div className="text-[10px] font-mono text-[#556964] hidden md:flex items-center gap-1.5">
           <Radio className="w-2.5 h-2.5 text-[#00e676]" />
           <span>SECURE OPERATING PICTURE</span>

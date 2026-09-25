@@ -166,6 +166,13 @@ class ApiClient {
         err.endpoint = endpoint;
         throw err;
       }
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        const err = new Error(`Endpoint ${endpoint} returned non-JSON response (${contentType || 'empty'})`) as ApiClientError;
+        err.status = response.status;
+        err.isNetworkError = true;
+        throw err;
+      }
       return (await response.json()) as T;
     } catch (err: any) {
       if (!err.status) {

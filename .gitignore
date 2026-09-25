@@ -14,7 +14,7 @@ frontend/node_modules/
 dataset/
 datasets/
 
-# ---- Model weights (binary, fetched separately via scripts/download_models.py) ----
+# ---- Model weights (binary, fetched deterministically via scripts/download_models.py) ----
 models/
 yolov8n.pt
 *.pt
@@ -53,6 +53,10 @@ agent/
 .freebuff/
 .playwright-cli/
 graphify-out/
+prd.json
+progress.txt
+skills-lock.json
+
 
 # ---- Reference Clones & Temporary Artifacts ----
 AI-Driven-Border-Security-and-Strategic-Management-System-main/

@@ -211,6 +211,7 @@ def benchmark_pipeline(
     # Find video
     if video_path is None:
         candidates = [
+            "frontend/public/videos/virat_cctv.mp4",
             "dataset/demo_border_clip.mp4",
             "dataset/sample.mp4",
         ]

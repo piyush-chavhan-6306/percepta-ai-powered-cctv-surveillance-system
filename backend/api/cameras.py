@@ -18,11 +18,7 @@ from backend.tracking.live_worker import get_worker_registry
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cameras", tags=["Cameras"])
 
-DEFAULT_DEMO_CLIP = (
-    "frontend/public/videos/cam01_person_border.mp4"
-    if Path("frontend/public/videos/cam01_person_border.mp4").is_file()
-    else "dataset/surveillance/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4"
-)
+DEFAULT_DEMO_CLIP = "frontend/public/videos/virat_cctv.mp4"
 ALLOWED_VIDEO_SUFFIXES = {
     ".mp4", ".avi", ".mov", ".mkv", ".mpg", ".mpeg", ".webm",
     ".flv", ".wmv", ".m4v", ".3gp", ".3g2", ".ts", ".mts", ".m2ts",
@@ -30,7 +26,8 @@ ALLOWED_VIDEO_SUFFIXES = {
 }
 MAX_UPLOAD_BYTES = 2 * (1 << 30)  # 2 GB
 # Directories scanned when the UI asks what footage is available locally.
-VIDEO_SEARCH_ROOTS = ("dataset/surveillance", "videos", "frontend/public/videos", "storage/uploads")
+# Strictly limited to bundled demo video and operator uploads; never scans the entire CCTV 01 dataset.
+VIDEO_SEARCH_ROOTS = ("frontend/public/videos", "videos", "storage/uploads")
 
 
 def resolve_video_path(candidate: str) -> Optional[str]:
@@ -185,11 +182,11 @@ async def get_camera_video_file(camera_id: str):
         if matched and Path(matched).is_file():
             video_path = matched
         else:
-            # Fallback to any available CCTV/surveillance video
+            # Fallback strictly to the primary virat demo video
             candidates = [
                 Path("frontend/public/videos/virat_cctv.mp4"),
-                Path("dataset/surveillance/CCTV 01/VIRAT_S_000205_02_000409_000566.mp4"),
-                Path("frontend/public/videos/border-demo.mp4"),
+                Path("frontend/dist/videos/virat_cctv.mp4"),
+                Path("videos/virat_cctv.mp4"),
             ]
             for c in candidates:
                 if c.is_file():

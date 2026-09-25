@@ -26,6 +26,27 @@ async def inspect_database_diagnostics() -> Dict[str, Any]:
     shm_size = os.path.getsize(shm_path) if os.path.exists(shm_path) else 0
 
     t0 = time.perf_counter()
+    db_url = settings.DATABASE_URL
+    is_postgres = db_url.startswith("postgresql")
+
+    if is_postgres:
+        async with factory() as session:
+            res = await session.execute(text("SELECT version();"))
+            version_str = res.scalar() or "PostgreSQL"
+        latency_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+        return {
+            "engine": "Neon PostgreSQL (asyncpg)",
+            "dialect": "postgresql",
+            "provider": "Neon Cloud",
+            "version": version_str,
+            "health_probe_latency_ms": latency_ms,
+            "status": "ONLINE_ACTIVE",
+            "enterprise_migration": {
+                "status": "ACTIVE_POSTGRESQL",
+                "orm_layer": "SQLAlchemy 2.0 Async (Portable ORM)",
+            },
+        }
+
     async with factory() as session:
         # Check journal mode
         res_jm = await session.execute(text("PRAGMA journal_mode;"))
@@ -44,7 +65,6 @@ async def inspect_database_diagnostics() -> Dict[str, Any]:
         page_size = res_ps.scalar() or 4096
 
     latency_ms = round((time.perf_counter() - t0) * 1000.0, 2)
-
     total_storage_bytes = db_size + wal_size + shm_size
 
     return {

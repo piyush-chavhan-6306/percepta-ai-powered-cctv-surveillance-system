@@ -29,20 +29,21 @@ def _get_sync_engine():
     from backend.config import get_settings
     settings = get_settings()
     raw_url = settings.DATABASE_URL
-    # Convert async driver URL to sync: sqlite+aiosqlite:/// -> sqlite:///
-    sync_url = raw_url.replace("sqlite+aiosqlite:///", "sqlite:///")
-    _sync_engine = create_engine(
-        sync_url,
-        echo=False,
-        future=True,
-        connect_args={"check_same_thread": False},
-    )
-    # Ensure WAL + busy timeout for concurrent access
-    with _sync_engine.connect() as conn:
-        conn.execute(text("PRAGMA journal_mode=WAL;"))
-        conn.execute(text("PRAGMA busy_timeout=5000;"))
-        conn.execute(text("PRAGMA synchronous=NORMAL;"))
-        conn.commit()
+    # Convert async driver URL to sync
+    sync_url = raw_url.replace("sqlite+aiosqlite:///", "sqlite:///").replace("postgresql+asyncpg://", "postgresql://")
+    is_sqlite = sync_url.startswith("sqlite")
+    
+    engine_kwargs = {"echo": False, "future": True}
+    if is_sqlite:
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+        
+    _sync_engine = create_engine(sync_url, **engine_kwargs)
+    if is_sqlite and ":memory:" not in sync_url:
+        with _sync_engine.connect() as conn:
+            conn.execute(text("PRAGMA journal_mode=WAL;"))
+            conn.execute(text("PRAGMA busy_timeout=5000;"))
+            conn.execute(text("PRAGMA synchronous=NORMAL;"))
+            conn.commit()
     logger.info("NormalizedStore: sync engine initialized")
     return _sync_engine
 

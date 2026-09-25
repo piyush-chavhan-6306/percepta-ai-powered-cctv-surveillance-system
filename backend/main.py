@@ -110,8 +110,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     settings.ensure_directories()
 
-    # 1. Initialize SQLite Database with WAL mode
+    # 1. Initialize Database with dialect-aware async engine
     await init_db()
+
+    # 1b. Verify Model Manifest and offline surveillance bundle readiness
+    from backend.core.model_manager import report_model_readiness
+    report_model_readiness()
 
     # 2. Log Gateway Status Banner
     log_gateway_startup_banner()
@@ -171,12 +175,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as zm_err:
         logger.warning(f"Failed to initialize default zones: {zm_err}")
 
+    # 2d. Start Offline-First Durable Synchronization Worker
+    try:
+        from backend.database.sync_worker import get_sync_worker
+        await get_sync_worker().start()
+    except Exception as sw_err:
+        logger.warning(f"Failed to start sync worker: {sw_err}")
+
     # 3. Register default camera in inventory (standby by default)
     await bootstrap_demo_camera(autostart=settings.AUTOSTART_DEMO_CAMERA)
 
     yield
 
-    # 4. Stop perception workers before their sources, then close the database.
+    # 4. Stop sync worker and perception workers, then close the database.
+    try:
+        from backend.database.sync_worker import get_sync_worker
+        await get_sync_worker().stop()
+    except Exception:
+        pass
     await get_worker_registry().stop_all()
     manager = get_camera_manager()
     await manager.stop_all()

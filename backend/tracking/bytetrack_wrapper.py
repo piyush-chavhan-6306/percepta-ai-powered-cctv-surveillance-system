@@ -10,7 +10,10 @@ from types import SimpleNamespace
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 import numpy as np
 import torch
-from ultralytics.trackers.byte_tracker import BYTETracker
+try:
+    from backend.tracking.byte_tracker import BYTETracker
+except Exception:
+    from ultralytics.trackers.byte_tracker import BYTETracker
 
 from backend.detection.detector import DetectionResult
 from backend.ingestion.adapter import FrameData

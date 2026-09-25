@@ -45,7 +45,10 @@ export const CameraCard: React.FC<CameraCardProps> = ({
   const [streamError, setStreamError] = useState<boolean>(false);
   const [isActionLoading, setIsActionLoading] = useState<boolean>(false);
   const [showAIOverlays, setShowAIOverlays] = useState<boolean>(true);
-  const [animTime, setAnimTime] = useState<number>(0);
+
+  // Real perception telemetry state (loaded from virat_perception_track.json for truthful replay)
+  const [precomputedFrames, setPrecomputedFrames] = useState<any[]>([]);
+  const [currentTargets, setCurrentTargets] = useState<any[]>([]);
 
   // Drawing state for Task B: Zone & Tripwire in-place creator
   const [drawMode, setDrawMode] = useState<"none" | "polygon" | "tripwire">("none");
@@ -59,16 +62,49 @@ export const CameraCard: React.FC<CameraCardProps> = ({
 
   const streamUrl = api.getVideoStreamUrl(camera.camera_id);
 
-  // Synchronized target motion clock for AI bounding box tracking
+  // Load verified precomputed YOLOv8n + ByteTrack Kalman tracks for truthful demo replay
   useEffect(() => {
-    if (!isPlaying) return;
-    const interval = setInterval(() => {
-      setAnimTime((t) => (t + 0.05) % (Math.PI * 2));
-    }, 50);
-    return () => clearInterval(interval);
-  }, [isPlaying]);
+    fetch("/data/virat_perception_track.json")
+      .then((res) => {
+        if (!res.ok) return null;
+        return res.json();
+      })
+      .then((data) => {
+        if (data?.frames) {
+          setPrecomputedFrames(data.frames);
+        }
+      })
+      .catch((err) => {
+        console.warn("Could not load perception telemetry:", err);
+      });
+  }, []);
 
-  // Compute video source from preview url, source url or local video dataset
+  // Synchronize bounding box overlays with actual video time during demo replay
+  useEffect(() => {
+    if (!isPlaying || !streamError || precomputedFrames.length === 0) {
+      if (currentTargets.length > 0) setCurrentTargets([]);
+      return;
+    }
+    const updateTracking = () => {
+      const vid = videoRef.current;
+      if (!vid) return;
+      const t = vid.currentTime;
+      let closest: any = null;
+      let minDiff = 0.15;
+      for (let i = 0; i < precomputedFrames.length; i++) {
+        const diff = Math.abs(precomputedFrames[i].timestamp - t);
+        if (diff < minDiff) {
+          minDiff = diff;
+          closest = precomputedFrames[i];
+        }
+      }
+      setCurrentTargets(closest?.targets || []);
+    };
+    const interval = setInterval(updateTracking, 80);
+    return () => clearInterval(interval);
+  }, [isPlaying, streamError, precomputedFrames]);
+
+  // Compute video source: defaults strictly to virat_cctv.mp4
   const videoSrc = useMemo(() => {
     if (cameraPreviewUrls && cameraPreviewUrls[camera.camera_id]) {
       return cameraPreviewUrls[camera.camera_id];
@@ -79,18 +115,10 @@ export const CameraCard: React.FC<CameraCardProps> = ({
     if (camera.source_url && (camera.source_url.startsWith("http") || camera.source_url.startsWith("/") || camera.source_url.startsWith("blob:"))) {
       return camera.source_url;
     }
-    const id = (camera.camera_id || "").toUpperCase();
-    if (id.includes("01") || id.includes("1")) return "/videos/cam01_person_border.mp4";
-    if (id.includes("02") || id.includes("2")) return "/videos/cam02_tracking.mp4";
-    if (id.includes("03") || id.includes("3")) return "/videos/cam03_vehicle.mp4";
-    if (id.includes("04") || id.includes("4")) return "/videos/cam04_night_ir.mp4";
-    return "/videos/border-demo.mp4";
+    return "/videos/virat_cctv.mp4";
   }, [camera.camera_id, camera.preview_url, camera.source_url, cameraPreviewUrls]);
 
-  // Dynamic perceptual tracking metrics
-  const targetX = 42 + Math.sin(animTime) * 16;
-  const targetY = 38 + Math.cos(animTime) * 5;
-  const isBreached = targetX > 48;
+  const hasBreachedTarget = currentTargets.some((t) => t.is_breached);
 
   const handleTogglePlay = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -421,88 +449,85 @@ export const CameraCard: React.FC<CameraCardProps> = ({
           </div>
         )}
 
-        {/* Tactical AI Perception Overlay (Bounding Box, Tripwire, Target Tracking) */}
+        {/* Tactical AI Perception Overlay (Real YOLO + ByteTrack Telemetry) */}
         {isPlaying && showAIOverlays && drawMode === "none" && (
-          <svg className="absolute inset-0 w-full h-full pointer-events-none z-15">
-            {/* Virtual Perimeter Tripwire Line at 50% */}
-            <line
-              x1="50%"
-              y1="8%"
-              x2="50%"
-              y2="92%"
-              stroke={isBreached ? "#ff1744" : "#ffab00"}
-              strokeWidth="2"
-              strokeDasharray="6 4"
-            />
-            <text
-              x="51%"
-              y="16%"
-              fill={isBreached ? "#ff1744" : "#ffab00"}
-              fontSize="10"
-              fontFamily="monospace"
-              fontWeight="bold"
-            >
-              {isBreached ? "◄ ⚡ BREACH: TRIPWIRE CROSSED ►" : "◄ TRIPWIRE ALPHA: SEC-09 ►"}
-            </text>
+          <div className="absolute inset-0 w-full h-full pointer-events-none z-15">
+            {/* Status Truthfulness Badge */}
+            <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/75 border border-white/10 text-[9px] font-mono tracking-wider">
+              {!streamError ? (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#00e676] animate-pulse" />
+                  <span className="text-[#00e676] font-bold">LIVE AI STREAM</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#00e5ff]" />
+                  <span className="text-[#00e5ff] font-bold">REAL PERCEPTION REPLAY</span>
+                </>
+              )}
+            </div>
 
-            {/* Dynamic Target Bounding Box */}
-            <g>
-              <rect
-                x={`${targetX}%`}
-                y={`${targetY}%`}
-                width="9%"
-                height="26%"
-                fill={isBreached ? "rgba(255, 23, 68, 0.18)" : "rgba(0, 229, 255, 0.12)"}
-                stroke={isBreached ? "#ff1744" : "#00e5ff"}
-                strokeWidth="2"
-                rx="2"
-              />
-              {/* Corner Accents */}
-              <path
-                d={`M ${targetX}% ${targetY + 4}% L ${targetX}% ${targetY}% L ${targetX + 2.5}% ${targetY}%`}
-                stroke={isBreached ? "#ff1744" : "#ffffff"}
-                strokeWidth="2.5"
-                fill="none"
-              />
-              {/* Target Identification Badge */}
-              <rect
-                x={`${targetX}%`}
-                y={`${targetY - 5.5}%`}
-                width="13%"
-                height="5.5%"
-                fill={isBreached ? "#ff1744" : "#00e5ff"}
-                rx="2"
-              />
-              <text
-                x={`${targetX + 0.8}%`}
-                y={`${targetY - 1.8}%`}
-                fill="#000000"
-                fontSize="9"
-                fontFamily="monospace"
-                fontWeight="bold"
-              >
-                {isBreached ? "INTRUDER 98%" : "TARGET 96%"}
-              </text>
+            {/* Overlays for Real Replay Targets */}
+            {streamError && currentTargets.length > 0 && (
+              <svg className="w-full h-full pointer-events-none">
+                {currentTargets.map((target, idx) => {
+                  const [bx, by, bw, bh] = target.box || [0, 0, 0, 0];
+                  const breached = Boolean(target.is_breached);
+                  const strokeColor = breached ? "#ff1744" : "#00e5ff";
+                  const fillColor = breached ? "rgba(255, 23, 68, 0.18)" : "rgba(0, 229, 255, 0.12)";
+                  const label = `${(target.class_name || "target").toUpperCase()} #${target.track_id} ${Math.round((target.confidence || 0.85) * 100)}%`;
 
-              {/* Motion Vector Line */}
-              <line
-                x1={`${targetX + 4.5}%`}
-                y1={`${targetY + 13}%`}
-                x2={`${targetX + 8}%`}
-                y2={`${targetY + 13}%`}
-                stroke={isBreached ? "#ff1744" : "#00e5ff"}
-                strokeWidth="1.5"
-                strokeDasharray="2 2"
-              />
-            </g>
-          </svg>
-        )}
+                  return (
+                    <g key={`target-${target.track_id || idx}`}>
+                      <rect
+                        x={`${bx}%`}
+                        y={`${by}%`}
+                        width={`${bw}%`}
+                        height={`${bh}%`}
+                        fill={fillColor}
+                        stroke={strokeColor}
+                        strokeWidth="2"
+                        rx="2"
+                      />
+                      {/* Corner Accents */}
+                      <path
+                        d={`M ${bx}% ${by + 3}% L ${bx}% ${by}% L ${bx + 2}% ${by}%`}
+                        stroke={strokeColor}
+                        strokeWidth="2.5"
+                        fill="none"
+                      />
+                      {/* Target Identification Badge */}
+                      <rect
+                        x={`${bx}%`}
+                        y={`${Math.max(1, by - 4.5)}%`}
+                        width={`${Math.max(12, label.length * 1.3)}%`}
+                        height="4.5%"
+                        fill={strokeColor}
+                        rx="2"
+                      />
+                      <text
+                        x={`${bx + 0.8}%`}
+                        y={`${Math.max(3.2, by - 1.2)}%`}
+                        fill="#000000"
+                        fontSize="9"
+                        fontFamily="monospace"
+                        fontWeight="bold"
+                      >
+                        {label}
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+            )}
 
-        {/* Live Breach Banner */}
-        {isPlaying && showAIOverlays && isBreached && drawMode === "none" && (
-          <div className="absolute top-2 left-2 z-20 bg-red-600/90 text-white font-mono-tech text-[10px] px-2.5 py-1 rounded shadow-lg animate-pulse flex items-center gap-1.5 font-bold border border-red-400">
-            <AlertCircle className="w-3.5 h-3.5" />
-            <span>BUFFER ZONE BREACH — TRK-01</span>
+            {/* Live Real Breach Banner (Triggered ONLY by real breached targets) */}
+            {hasBreachedTarget && (
+              <div className="absolute top-2 left-2 z-20 bg-red-600/90 text-white font-mono text-[10px] px-2.5 py-1 rounded shadow-lg animate-pulse flex items-center gap-1.5 font-bold border border-red-400">
+                <AlertCircle className="w-3.5 h-3.5" />
+                <span>RESTRICTED ZONE BREACH DETECTED</span>
+              </div>
+            )}
           </div>
         )}
 

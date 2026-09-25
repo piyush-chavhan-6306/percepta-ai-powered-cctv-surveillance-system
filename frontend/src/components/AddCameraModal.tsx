@@ -35,12 +35,9 @@ export interface IngestionErrorInfo {
 }
 
 const DEFAULT_BUNDLED_CLIPS: Array<{ name: string; path: string; size_mb: number }> = [
-  { name: "Sector Alpha — Border Intruder Detection (cam01_person_border.mp4)", path: "/videos/cam01_person_border.mp4", size_mb: 5.4 },
-  { name: "Sector Bravo — Multi-Target Perimeter Tracking (cam02_tracking.mp4)", path: "/videos/cam02_tracking.mp4", size_mb: 1.9 },
-  { name: "Sector Charlie — Vehicle Checkpoint ANPR (cam03_vehicle.mp4)", path: "/videos/cam03_vehicle.mp4", size_mb: 5.1 },
-  { name: "Sector Delta — Night Vision Thermal IR (cam04_night_ir.mp4)", path: "/videos/cam04_night_ir.mp4", size_mb: 2.8 },
-  { name: "Sector Echo — Wide-Area Drone Surveillance (virat_cctv.mp4)", path: "/videos/virat_cctv.mp4", size_mb: 5.4 },
+  { name: "Border Post Alpha — Optical CCTV (virat_cctv.mp4)", path: "/videos/virat_cctv.mp4", size_mb: 5.5 },
 ];
+
 
 export const AddCameraModal: React.FC<AddCameraModalProps> = ({
   isOpen,

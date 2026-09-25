@@ -382,11 +382,8 @@ function PublicNav({ onMenu, onNavigate }: PublicNavProps) {
       </nav>
 
       <div className="nav-actions">
-        <Link to="/auth" className="nav-login" data-testid="nav-login">
-          AUTH
-        </Link>
         <button
-          onClick={() => navigate("/dashboard")}
+          onClick={() => navigate("/auth?redirect=/dashboard")}
           className="button button-small"
           data-testid="nav-demo"
         >
@@ -689,20 +686,12 @@ export default function Landing() {
           <button
             onClick={() => {
               setMenu(false);
-              navigate("/dashboard");
+              navigate("/auth?redirect=/dashboard");
             }}
             className="button mt-6 text-center w-full justify-center"
+            data-testid="mobile-enter-c2"
           >
-            LAUNCH C2 CONSOLE →
-          </button>
-          <button
-            onClick={() => {
-              setMenu(false);
-              navigate("/auth");
-            }}
-            className="button button-ghost mt-3 text-center w-full justify-center"
-          >
-            OPERATOR AUTH // LOGIN →
+            ENTER C2 →
           </button>
         </div>
       )}
@@ -861,7 +850,7 @@ export default function Landing() {
 
           <div className="flex flex-wrap items-center gap-5 pt-4">
             <button
-              onClick={() => navigate("/dashboard")}
+              onClick={() => navigate("/auth?redirect=/dashboard")}
               className="button font-mono text-xs py-4 px-6"
               data-testid="view-demo-button"
             >

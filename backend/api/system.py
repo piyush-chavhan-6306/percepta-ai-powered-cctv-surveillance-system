@@ -242,3 +242,12 @@ async def get_database_diagnostics():
     """Inspect SQLite WAL storage metrics and PostgreSQL migration readiness."""
     from backend.database_diagnostics import inspect_database_diagnostics
     return await inspect_database_diagnostics()
+
+
+@router.get("/sync-status")
+async def get_sync_status():
+    """Inspect offline-first synchronization outbox status and cloud connectivity."""
+    from backend.database.sync_worker import get_sync_worker
+    worker = get_sync_worker()
+    return await worker.get_status()
+

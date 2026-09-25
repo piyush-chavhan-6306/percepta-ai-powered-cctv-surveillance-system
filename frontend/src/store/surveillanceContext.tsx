@@ -27,10 +27,7 @@ import {
 } from "../lib/demoData";
 
 const DEFAULT_PREVIEW_URLS: Record<string, string> = {
-  "CAM-01": "/videos/cam01_person_border.mp4",
-  "CAM-02": "/videos/cam02_tracking.mp4",
-  "CAM-03": "/videos/cam03_vehicle.mp4",
-  "CAM-04": "/videos/cam04_night_ir.mp4",
+  "CAM-01": "/videos/virat_cctv.mp4",
 };
 
 const FALLBACK_ALERTS: AlertItem[] = DEMO_ALERTS.map((a) => ({
@@ -96,7 +93,7 @@ interface SurveillanceContextType {
 const SurveillanceContext = createContext<SurveillanceContextType | undefined>(undefined);
 
 export const SurveillanceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [cameras, setCameras] = useState<CameraRecord[]>(DEMO_CAMERAS.slice(0, 4));
+  const [cameras, setCameras] = useState<CameraRecord[]>(DEMO_CAMERAS.slice(0, 1));
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>("CAM-01");
   const [cameraPreviewUrls, setCameraPreviewUrls] = useState<Record<string, string>>(DEFAULT_PREVIEW_URLS);
   const [alerts, setAlerts] = useState<AlertItem[]>(FALLBACK_ALERTS);

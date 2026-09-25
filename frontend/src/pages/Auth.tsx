@@ -5,7 +5,7 @@ import {
   signUpOperator,
   signInOAuth,
   resetOperatorPassword,
-} from "../lib/supabaseClient";
+} from "../lib/auth";
 import { StarsBackground } from "../components/StarsBackground";
 import { PerceptaLogo } from "../components/PerceptaLogo";
 import { ShieldAlert, Check, ChevronRight, Menu, X } from "lucide-react";
@@ -14,7 +14,7 @@ import "../WorldMotion.css";
 export default function Auth() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const returnTo = searchParams.get("returnTo") || "/dashboard";
+  const returnTo = searchParams.get("redirect") || searchParams.get("returnTo") || "/dashboard";
 
   const [mode, setMode] = useState<"signin" | "request">("signin");
   const [email, setEmail] = useState("callsign@defense.percepta.ai");

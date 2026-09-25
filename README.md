@@ -45,9 +45,14 @@ $$\text{One Underlying Incident} \equiv \text{One Operator-Facing Alert}$$
 [FastAPI Gateway + WebSocket Push + Grounded Defense AI]
 ```
 
-- **Backend:** FastAPI (Python 3.13), SQLAlchemy 2.0 (Async/Sync), ByteTrack, TorchReID (OSNet x0.25), ONNX Runtime, OpenCV, PyTorch.
-- **Frontend:** React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons, Recharts.
-- **Database:** SQLite 3 (WAL mode, foreign key enforcement, 18 normalized tables).
+- **Backend:** FastAPI (Python 3.10–3.13), SQLAlchemy 2.0 (Async/Sync Portable ORM), Native ByteTrack, Native Kalman Filter, TorchReID (OSNet x0.25), ONNX Runtime, OpenCV, PyTorch.
+- **Frontend:** React 19, TypeScript, Vite, Tailwind CSS, Lucide Icons.
+- **Database Architecture (Dual Deployment Modes):**
+  - **Offline / Edge Mode:** Local SQLite (WAL mode, zero network dependency, full local persistence).
+  - **Online / Cloud Mode:** Neon PostgreSQL (cloud persistence, background outbox synchronization).
+  - **Synchronization:** Asynchronous non-blocking durable outbox queue (`backend/database/sync_worker.py`).
+- **Authentication:** FastAPI JWT + bcrypt (`/api/auth/token`) with operator clearance session guards.
+- **Model Provisioning:** Deterministic cryptographic manifest with offline bundle verification (`scripts/download_models.py`).
 
 ---
 

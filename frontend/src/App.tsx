@@ -69,6 +69,34 @@ const CommandCenterLayout: React.FC = () => {
   );
 };
 
+import { getCurrentSession } from "./lib/auth";
+import { Loader2 } from "lucide-react";
+
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+
+  React.useEffect(() => {
+    getCurrentSession().then((session) => {
+      setIsAuthenticated(Boolean(session && session.access_token));
+    });
+  }, []);
+
+  if (isAuthenticated === null) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-[#05070a] text-gray-400 font-mono text-xs">
+        <Loader2 className="w-5 h-5 animate-spin mr-2 text-[#00e5ff]" />
+        VERIFYING OPERATOR CLEARANCE...
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/auth?redirect=/dashboard" replace />;
+  }
+
+  return <>{children}</>;
+}
+
 /* ─── App Root ────────────────────────────────────────────────────────────── */
 export default function App() {
   return (
@@ -77,13 +105,15 @@ export default function App() {
       <Route path="/" element={<Landing />} />
       <Route path="/auth" element={<Auth />} />
 
-      {/* Operational Command Center */}
+      {/* Operational Command Center (Protected by Operator Clearance Guard) */}
       <Route
         path="/dashboard/*"
         element={
-          <SurveillanceProvider>
-            <CommandCenterLayout />
-          </SurveillanceProvider>
+          <ProtectedRoute>
+            <SurveillanceProvider>
+              <CommandCenterLayout />
+            </SurveillanceProvider>
+          </ProtectedRoute>
         }
       />
 

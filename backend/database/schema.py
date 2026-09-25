@@ -447,3 +447,27 @@ class AIQuery(Base):
     unknowns: Mapped[list | None] = mapped_column(JSON, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     processing_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+# ─────────────────────────────────────────────
+# SYNC OUTBOX (Offline-First Synchronization)
+# ─────────────────────────────────────────────
+class SyncOutbox(Base):
+    """
+    Offline-first Synchronization Outbox Record.
+    Queues locally committed entity events to be synchronized asynchronously to Neon PostgreSQL
+    whenever internet connectivity is available.
+    """
+    __tablename__ = "sync_outbox"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    entity_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False, default="upsert")
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+    synced: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+

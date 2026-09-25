@@ -257,7 +257,7 @@ export function BorderWatchHero({
 
             {/* Video Fallback / Video player */}
             <video
-              src="/videos/border-demo.mp4"
+              src="/videos/virat_cctv.mp4"
               autoPlay
               loop
               muted
